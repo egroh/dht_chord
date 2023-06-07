@@ -1,14 +1,18 @@
 #![feature(async_closure)]
 
-use bincode::{deserialize, Options};
+mod dht;
+
+use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 struct Dht {
-    data: (),
+    dht: dht::SChord<[u8; 32], Vec<u8>>,
 }
 
 struct ApiPacket {
@@ -23,20 +27,60 @@ struct ApiPacketHeader {
 }
 
 enum ApiPacketMessage {
-    Unparsed(Vec<u8>),
     Put(DhtPut),
     Get(DhtGet),
-    Success(DhtFailure),
-    Failure(DhtSuccess),
+    Unparsed(Vec<u8>),
 }
 
 #[derive(Deserialize, Debug)]
 struct DhtPut {
     ttl: u16,
-    replication: u8,
-    reserved: u8,
+    _replication: u8,
+    _reserved: u8,
     key: [u8; 32],
     value: Vec<u8>,
+}
+
+impl Dht {
+    fn new(initial_peers: &[SocketAddr]) -> Self {
+        Dht {
+            dht: dht::SChord::new(initial_peers),
+        }
+    }
+    async fn put(&self, put: DhtPut) {
+        self.dht
+            .insert_with_ttl(put.key, put.value, Duration::from_secs(put.ttl as u64))
+            .await;
+    }
+    async fn get(
+        &self,
+        get: &DhtGet,
+        response_socket: &mut TcpStream,
+    ) -> Result<(), Box<dyn Error>> {
+        let key = &get.key;
+        match self.dht.get(key).await {
+            Some(value) => {
+                let header = ApiPacketHeader {
+                    size: 4 + key.len() as u16 + value.len() as u16,
+                    message_type: 652,
+                };
+                let mut buf = serialize(&header).unwrap();
+                buf.extend(key);
+                buf.extend(value);
+                response_socket.write_all(&buf).await?;
+            }
+            None => {
+                let header = ApiPacketHeader {
+                    size: 4 + key.len() as u16,
+                    message_type: 653,
+                };
+                let mut buf = serialize(&header).unwrap();
+                buf.extend(key);
+                response_socket.write_all(&buf).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -56,6 +100,15 @@ struct DhtFailure {
 }
 
 impl ApiPacket {
+    fn default() -> Self {
+        ApiPacket {
+            header: ApiPacketHeader {
+                size: 0,
+                message_type: 0,
+            },
+            message: ApiPacketMessage::Unparsed(Vec::new()),
+        }
+    }
     fn parse(&mut self, byte: u8) -> Result<(), Box<dyn Error>> {
         if let ApiPacketMessage::Unparsed(v) = &mut self.message {
             v.push(byte);
@@ -85,16 +138,11 @@ impl ApiPacket {
     }
 }
 
-impl Dht {
-    fn put(&self, put: &DhtPut) {}
-    fn get(&self, get: &DhtGet, response_socket: &mut TcpStream) -> Result<(), Box<dyn Error>> {
-        Ok(())
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let dht = Arc::new(Dht { data: () });
+    // todo: parse config file
+    // todo: RPS communication for bootstrap peers or get from config file
+    let dht = Arc::new(Dht::new(&[]));
     let listener = TcpListener::bind("127.0.0.1:7401").await?;
     loop {
         let (mut socket, _) = listener.accept().await?;
@@ -104,13 +152,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let mut buf = [0; 1024];
 
                 let mut header_bytes = Vec::new();
-                let mut packet: ApiPacket = ApiPacket {
-                    header: ApiPacketHeader {
-                        size: 0,
-                        message_type: 0,
-                    },
-                    message: ApiPacketMessage::Unparsed(Vec::new()),
-                };
+                let mut packet: ApiPacket = ApiPacket::default();
 
                 // Read data from socket
                 loop {
@@ -132,17 +174,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         } else {
                             packet.parse(*byte)?;
-                            match &packet.message {
+                            match packet.message {
                                 ApiPacketMessage::Unparsed(_) => {}
-                                // todo: async
+                                // todo: async - call put in new thread
                                 ApiPacketMessage::Put(p) => {
-                                    dht.put(p);
+                                    dht.put(p).await;
+                                    header_bytes.clear();
+                                    packet = ApiPacket::default();
                                 }
-                                // todo: async
+                                // todo: async - call get in new thread
                                 ApiPacketMessage::Get(g) => {
-                                    dht.get(g, &mut socket)?;
+                                    dht.get(&g, &mut socket).await?;
+                                    header_bytes.clear();
+                                    packet = ApiPacket::default();
                                 }
-                                _ => unreachable!("Other package types will not parse"),
                             }
                         }
                     }
