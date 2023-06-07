@@ -1,8 +1,10 @@
 #![feature(async_closure)]
 
+use bincode::Options;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 enum Message {
@@ -26,7 +28,14 @@ struct DhtSuccess {
     value: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 struct DhtFailure {
+    size: u16,
+    message_type: u16,
+    key: [u8; 32],
+}
+
+struct DhtFailure2 {
     key: Vec<u8>,
 }
 
@@ -35,8 +44,55 @@ struct Dht {
 }
 
 impl Dht {
-    fn put(&self, key: &Vec<u8>, value: &Vec<u8>) {}
-    fn get(&self, key: &Vec<u8>, response_socket: &mut TcpStream) -> Result<(), Box<dyn Error>> {
+    fn put(&self, key: &Vec<u8>, value: &Vec<u8>) {
+        // Convert bytes into ASCII String for better readability
+        let ascii_key: String = key.iter().map(|&byte| byte as char).collect();
+        let ascii_value: String = value.iter().map(|&byte| byte as char).collect();
+        // Print debug information
+        println!("DHT PUT {:?}, {:?}", ascii_key, ascii_value);
+    }
+    async fn get(
+        &self,
+        key: &Vec<u8>,
+        response_socket: &mut TcpStream,
+    ) -> Result<(), Box<dyn Error>> {
+        // Convert bytes into ASCII String for better readability
+        let ascii_key: String = key.iter().map(|&byte| byte as char).collect();
+        // Print debug information
+        println!("DHT GET {:?}", ascii_key);
+
+        // Ensure the vector contains exactly 32 elements
+        if key.len() != 32 {
+            // Maybe dont panic here, convert other code such that this never happens
+            panic!("Key size must be exactly 32 bytes");
+        }
+
+        // Convert the vector reference to an array
+        let key_array: &[u8; 32] = {
+            let key_slice = key.as_slice();
+
+            // This will cause a panic if the vector size is not exactly 32
+            let key_arr = key_slice.try_into().unwrap();
+
+            key_arr
+        };
+
+        let encode_options = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_big_endian();
+
+        // Answer with failure for now, every time
+        let response = encode_options
+            .serialize(&DhtFailure {
+                size: 4 + 32,
+                message_type: 653,
+                key: *key_array,
+            })
+            .unwrap();
+        response_socket.write(&response).await?;
+
+        println!("Sending {:?}", response);
+
         Ok(())
     }
 }
@@ -44,7 +100,7 @@ impl Dht {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let dht = Arc::new(Dht { data: () });
-    let listener = TcpListener::bind("127.0.0.1:13337").await?;
+    let listener = TcpListener::bind("127.0.0.1:7401").await?;
     loop {
         let (mut socket, _) = listener.accept().await?;
         let dht = Arc::clone(&dht);
@@ -95,7 +151,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     651 => {
                                         message_type =
                                             Some(Message::Get(DhtGet { key: Vec::new() }));
-                                        if size != 4 + 8 {
+                                        if size != 4 + 32 {
                                             return Err("Invalid size".into());
                                         }
                                     }
@@ -116,10 +172,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
                                 }
                                 Some(Message::Get(g)) => {
-                                    if g.key.len() < 32 {
+                                    if g.key.len() < 31 {
                                         g.key.push(*byte);
                                     } else {
-                                        dht.get(&g.key, &mut socket)?;
+                                        g.key.push(*byte);
+                                        dht.get(&g.key, &mut socket).await?;
                                     }
                                 }
                                 _ => {
