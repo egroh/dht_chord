@@ -89,7 +89,7 @@ impl Dht {
                 key: *key_array,
             })
             .unwrap();
-        response_socket.write(&response).await?;
+        response_socket.write_all(&response).await?;
 
         println!("Sending {:?}", response);
 
