@@ -1,24 +1,17 @@
 #![feature(async_closure)]
 
-mod dht;
-
-use bincode::{deserialize, serialize};
-use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+use bincode::{deserialize, serialize};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 
-struct Dht {
-    dht: dht::SChord<[u8; 32], Vec<u8>>,
-}
-
-struct ApiPacket {
-    header: ApiPacketHeader,
-    message: ApiPacketMessage,
-}
+mod dht;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ApiPacketHeader {
@@ -41,48 +34,6 @@ struct DhtPut {
     value: Vec<u8>,
 }
 
-impl Dht {
-    fn new(initial_peers: &[SocketAddr]) -> Self {
-        Dht {
-            dht: dht::SChord::new(initial_peers),
-        }
-    }
-    async fn put(&self, put: DhtPut) {
-        self.dht
-            .insert_with_ttl(put.key, put.value, Duration::from_secs(put.ttl as u64))
-            .await;
-    }
-    async fn get(
-        &self,
-        get: &DhtGet,
-        response_socket: &mut TcpStream,
-    ) -> Result<(), Box<dyn Error>> {
-        let key = &get.key;
-        match self.dht.get(key).await {
-            Some(value) => {
-                let header = ApiPacketHeader {
-                    size: 4 + key.len() as u16 + value.len() as u16,
-                    message_type: 652,
-                };
-                let mut buf = serialize(&header).unwrap();
-                buf.extend(key);
-                buf.extend(value);
-                response_socket.write_all(&buf).await?;
-            }
-            None => {
-                let header = ApiPacketHeader {
-                    size: 4 + key.len() as u16,
-                    message_type: 653,
-                };
-                let mut buf = serialize(&header).unwrap();
-                buf.extend(key);
-                response_socket.write_all(&buf).await?;
-            }
-        }
-        Ok(())
-    }
-}
-
 #[derive(Deserialize, Debug)]
 struct DhtGet {
     key: [u8; 32],
@@ -97,6 +48,11 @@ struct DhtSuccess {
 #[derive(Serialize, Debug)]
 struct DhtFailure {
     key: [u8; 32],
+}
+
+struct ApiPacket {
+    header: ApiPacketHeader,
+    message: ApiPacketMessage,
 }
 
 impl ApiPacket {
@@ -138,6 +94,52 @@ impl ApiPacket {
     }
 }
 
+struct Dht {
+    dht: dht::SChord<[u8; 32], Vec<u8>>,
+}
+
+impl Dht {
+    fn new(initial_peers: &[SocketAddr]) -> Self {
+        Dht {
+            dht: dht::SChord::new(initial_peers),
+        }
+    }
+    async fn put(&self, put: DhtPut) {
+        self.dht
+            .insert_with_ttl(put.key, put.value, Duration::from_secs(put.ttl as u64))
+            .await;
+    }
+    async fn get(&self, get: &DhtGet, response_socket: &Arc<Mutex<TcpStream>>) {
+        let key = &get.key;
+        match self.dht.get(key).await {
+            Some(value) => {
+                let header = ApiPacketHeader {
+                    size: 4 + key.len() as u16 + value.len() as u16,
+                    message_type: 652,
+                };
+                let mut buf = serialize(&header).unwrap();
+                buf.extend(key);
+                buf.extend(value);
+
+                if let Err(e) = response_socket.lock().await.write_all(&buf).await {
+                    eprintln!("Error writing to socket: {}", e);
+                }
+            }
+            None => {
+                let header = ApiPacketHeader {
+                    size: 4 + key.len() as u16,
+                    message_type: 653,
+                };
+                let mut buf = serialize(&header).unwrap();
+                buf.extend(key);
+                if let Err(e) = response_socket.lock().await.write_all(&buf).await {
+                    eprintln!("Error writing to socket: {}", e);
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // todo: parse config file
@@ -145,8 +147,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dht = Arc::new(Dht::new(&[]));
     let listener = TcpListener::bind("127.0.0.1:7401").await?;
     loop {
-        let (mut socket, _) = listener.accept().await?;
+        let (socket, _socket_address) = listener.accept().await?;
         let dht = Arc::clone(&dht);
+        let socket = Arc::new(Mutex::new(socket));
         tokio::spawn(async move {
             let connection_result = async move || -> Result<(), Box<dyn Error>> {
                 let mut buf = [0; 1024];
@@ -156,7 +159,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 // Read data from socket
                 loop {
-                    let n = match socket.read(&mut buf).await {
+                    let n = match socket.lock().await.read(&mut buf).await {
                         // socket closed
                         Ok(n) if n == 0 => return Ok(()),
                         Ok(n) => n,
@@ -175,26 +178,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         } else {
                             packet.parse(*byte)?;
                             match packet.message {
-                                ApiPacketMessage::Unparsed(_) => {}
-                                // todo: async - call put in new thread
                                 ApiPacketMessage::Put(p) => {
-                                    dht.put(p).await;
+                                    let dht = dht.clone();
+                                    tokio::spawn(async move {
+                                        dht.put(p).await;
+                                    });
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
-                                // todo: async - call get in new thread
                                 ApiPacketMessage::Get(g) => {
-                                    dht.get(&g, &mut socket).await?;
+                                    let dht = dht.clone();
+                                    let socket = socket.clone();
+                                    tokio::spawn(async move {
+                                        dht.get(&g, &socket).await;
+                                    });
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
+                                ApiPacketMessage::Unparsed(_) => {}
                             }
                         }
                     }
                 }
             };
             if let Err(e) = connection_result().await {
-                println!("Error on connection: {}", e)
+                eprintln!("Error on connection: {}", e)
             }
         });
     }
