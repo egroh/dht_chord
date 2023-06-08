@@ -1,11 +1,13 @@
 #![feature(async_closure)]
 
+use std::env;
 use std::error::Error;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
 use bincode::{deserialize, serialize};
+use ini::ini;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -95,12 +97,23 @@ impl ApiPacket {
 }
 
 struct Dht {
+    default_store_duration: Duration,
+    max_store_duration: Duration,
+    bind_address: SocketAddr,
     dht: dht::SChord<[u8; 32], Vec<u8>>,
 }
 
 impl Dht {
-    fn new(initial_peers: &[SocketAddr]) -> Self {
+    fn new(
+        default_store_duration: Duration,
+        max_store_duration: Duration,
+        bind_address: SocketAddr,
+        initial_peers: &[SocketAddr],
+    ) -> Self {
         Dht {
+            default_store_duration,
+            max_store_duration,
+            bind_address,
             dht: dht::SChord::new(initial_peers),
         }
     }
@@ -140,12 +153,52 @@ impl Dht {
     }
 }
 
+fn parse_command_line_arguments() -> (Dht, SocketAddr) {
+    let args = env::args().collect::<Vec<String>>();
+    assert_eq!(args[1], "-c");
+    let config = ini!(&args[2]);
+    let default_store_duration = Duration::from_secs(
+        config["dht"]["default_store_duration"]
+            .clone()
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
+    let max_store_duration = Duration::from_secs(
+        config["dht"]["max_store_duration"]
+            .clone()
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
+
+    let p2p_address = config["dht"]["p2p_address"]
+        .clone()
+        .unwrap()
+        .to_socket_addrs()
+        .unwrap()
+        .next()
+        .unwrap();
+    let api_address = config["dht"]["api_address"]
+        .clone()
+        .unwrap()
+        .to_socket_addrs()
+        .unwrap()
+        .next()
+        .unwrap();
+
+    (
+        Dht::new(default_store_duration, max_store_duration, p2p_address, &[]),
+        api_address,
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // todo: parse config file
     // todo: RPS communication for bootstrap peers or get from config file
-    let dht = Arc::new(Dht::new(&[]));
-    let listener = TcpListener::bind("127.0.0.1:7401").await?;
+    let (dht, api_address) = parse_command_line_arguments();
+    let dht = Arc::new(dht);
+    let listener = TcpListener::bind(api_address).await?;
     loop {
         let (socket, _socket_address) = listener.accept().await?;
         let dht = Arc::clone(&dht);

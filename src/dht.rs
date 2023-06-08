@@ -5,17 +5,17 @@ use std::time::Duration;
 use serde::Serialize;
 
 pub struct SChord<K: Serialize, V: Serialize> {
-    hash_map: HashMap<K, V>,
     default_store_duration: Duration,
     max_store_duration: Duration,
+    local_storage: HashMap<K, V>,
 }
 
 impl<K: Serialize, V: Serialize> SChord<K, V> {
     pub fn new(initial_peers: &[SocketAddr]) -> Self {
         SChord {
-            hash_map: HashMap::new(),
             default_store_duration: Duration::from_secs(60),
             max_store_duration: Duration::from_secs(600),
+            local_storage: HashMap::new(),
         }
     }
 
