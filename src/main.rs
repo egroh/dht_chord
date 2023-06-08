@@ -15,6 +15,11 @@ use tokio::sync::Mutex;
 
 mod dht;
 
+const API_DHT_PUT: u16 = 650;
+const API_DHT_GET: u16 = 651;
+const API_DHT_SUCCESS: u16 = 652;
+const API_DHT_FAILURE: u16 = 653;
+
 #[derive(Serialize, Deserialize, Debug)]
 struct ApiPacketHeader {
     size: u16,
@@ -73,14 +78,14 @@ impl ApiPacket {
             if self.header.size as usize <= v.len() + 4 {
                 match self.header.message_type {
                     // DHT PUT
-                    650 => {
+                    API_DHT_PUT => {
                         if self.header.size < 4 + 4 + 32 + 1 {
                             return Err("Invalid size".into());
                         }
                         self.message = ApiPacketMessage::Put(deserialize(v)?);
                     }
                     // DHT GET
-                    651 => {
+                    API_DHT_GET => {
                         if self.header.size != 4 + 32 {
                             return Err("Invalid size".into());
                         }
@@ -128,7 +133,7 @@ impl Dht {
             Some(value) => {
                 let header = ApiPacketHeader {
                     size: 4 + key.len() as u16 + value.len() as u16,
-                    message_type: 652,
+                    message_type: API_DHT_SUCCESS,
                 };
                 let mut buf = serialize(&header).unwrap();
                 buf.extend(key);
@@ -141,7 +146,7 @@ impl Dht {
             None => {
                 let header = ApiPacketHeader {
                     size: 4 + key.len() as u16,
-                    message_type: 653,
+                    message_type: API_DHT_FAILURE,
                 };
                 let mut buf = serialize(&header).unwrap();
                 buf.extend(key);
