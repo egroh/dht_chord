@@ -5,14 +5,18 @@ use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
+mod peer_communication;
 
-use bincode::{deserialize, serialize};
+use crate::api_communication::get_bincode_options;
+use bincode::config::{BigEndian, FixintEncoding, WithOtherEndian, WithOtherIntEncoding};
+use bincode::Options;
 use ini::ini;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
+mod api_communication;
 mod dht;
 
 const API_DHT_PUT: u16 = 650;
@@ -82,14 +86,14 @@ impl ApiPacket {
                         if self.header.size < 4 + 4 + 32 + 1 {
                             return Err("Invalid size".into());
                         }
-                        self.message = ApiPacketMessage::Put(deserialize(v)?);
+                        self.message = ApiPacketMessage::Put(get_bincode_options().deserialize(v)?);
                     }
                     // DHT GET
                     API_DHT_GET => {
                         if self.header.size != 4 + 32 {
                             return Err("Invalid size".into());
                         }
-                        self.message = ApiPacketMessage::Get(deserialize(v)?);
+                        self.message = ApiPacketMessage::Get(get_bincode_options().deserialize(v)?);
                     }
                     _ => return Err("Unknown message type".into()),
                 }
@@ -135,7 +139,7 @@ impl Dht {
                     size: 4 + key.len() as u16 + value.len() as u16,
                     message_type: API_DHT_SUCCESS,
                 };
-                let mut buf = serialize(&header).unwrap();
+                let mut buf = get_bincode_options().serialize(&header).unwrap();
                 buf.extend(key);
                 buf.extend(value);
 
@@ -148,7 +152,7 @@ impl Dht {
                     size: 4 + key.len() as u16,
                     message_type: API_DHT_FAILURE,
                 };
-                let mut buf = serialize(&header).unwrap();
+                let mut buf = get_bincode_options().serialize(&header).unwrap();
                 buf.extend(key);
                 if let Err(e) = response_socket.lock().await.write_all(&buf).await {
                     eprintln!("Error writing to socket: {}", e);
@@ -160,6 +164,7 @@ impl Dht {
 
 fn parse_command_line_arguments() -> (Dht, SocketAddr) {
     let args = env::args().collect::<Vec<String>>();
+    assert!(args.len() >= 2);
     assert_eq!(args[1], "-c");
     let config = ini!(&args[2]);
     let default_store_duration = Duration::from_secs(
@@ -198,10 +203,70 @@ fn parse_command_line_arguments() -> (Dht, SocketAddr) {
     )
 }
 
+fn main2() {
+    /*
+    let my_struct2 = MyStruct::Variant2(Struct2 {
+        field3: 20.0,
+        field4: false,
+    });
+
+    let bytes = bincode_options.serialize(&my_struct2).unwrap();
+
+    let result: Result<MyStruct, _> = bincode_options.deserialize(&bytes);
+    match result {
+        Ok(my_struct) => {
+            // Successfully deserialized the struct
+            match my_struct {
+                MyStruct::Variant1(struct1) => {
+                    println!("Variant1: {:?}", struct1);
+                }
+                MyStruct::Variant2(struct2) => {
+                    println!("Variant2: {:?}", struct2);
+                } // ... handle other variants
+            }
+        }
+        Err(err) => {
+            // Failed to deserialize the struct
+            eprintln!("Deserialization error: {}", err);
+        }
+    }
+    */
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
     // todo: RPS communication for bootstrap peers or get from config file
-    let (dht, api_address) = parse_command_line_arguments();
+    // let (dht, api_address) = parse_command_line_arguments();
+
+    for value in 0..=1 {
+        let dht = Dht::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            format!("{}{}", "127.0.0.1:4000", value)
+                .parse::<SocketAddr>()
+                .unwrap(),
+            &[],
+        );
+
+        tokio::spawn(async move {
+            let _ = peer_communication::start_peer_server(dht.bind_address).await;
+        });
+        tokio::spawn(async move {
+            let _ = program_main(
+                dht,
+                format!("{}{}", "127.0.0.1:3000", value)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+            )
+            .await;
+        });
+        if value == 1 {
+            let _ = peer_communication::send_and_receive().await;
+        }
+    }
+}
+
+async fn program_main(dht: Dht, api_address: SocketAddr) -> Result<(), Box<dyn Error>> {
     let dht = Arc::new(dht);
     let listener = TcpListener::bind(api_address).await?;
     loop {
@@ -227,7 +292,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         if header_bytes.len() < 4 {
                             header_bytes.push(*byte);
                             if header_bytes.len() == 4 {
-                                if let Ok(header_success) = deserialize(&header_bytes) {
+                                if let Ok(header_success) =
+                                    get_bincode_options().deserialize(&header_bytes)
+                                {
                                     packet.header = header_success;
                                 } else {
                                     return Err("Could not deserialize header".into());
