@@ -45,9 +45,7 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
         SChord::start_server_socket(state.clone(), server_address);
         match initial_peer {
             None => {}
-            Some(peer) => {
-                
-            }
+            Some(peer) => {}
         }
         SChord { state }
     }
@@ -65,3 +63,6 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
 
 pub trait SChordKey: Serialize + Eq + Hash + Bounded + Send + Sync + 'static {}
 pub trait SChordValue: Serialize + Send + Sync + 'static {}
+
+impl SChordKey for u64 {}
+impl SChordValue for Vec<u8> {}

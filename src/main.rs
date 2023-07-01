@@ -1,7 +1,9 @@
 #![feature(async_closure)]
 
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::error::Error;
+use std::hash::{Hash, Hasher};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,7 +119,7 @@ struct P2pDht {
     max_store_duration: Duration,
     public_server_address: SocketAddr,
     api_address: SocketAddr,
-    dht: dht::SChord<[u8; 32], Vec<u8>>,
+    dht: dht::SChord<u64, Vec<u8>>,
 }
 
 impl P2pDht {
@@ -136,21 +138,29 @@ impl P2pDht {
             dht: dht::SChord::new(initial_peer, public_server_address),
         }
     }
+
+    fn hash_vec_bytes(vec_bytes: &[u8]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        vec_bytes.hash(&mut hasher);
+        hasher.finish()
+    }
+
     async fn put(&self, put: DhtPut) {
+        let hashed_key = P2pDht::hash_vec_bytes(&put.key);
         self.dht
-            .insert_with_ttl(put.key, put.value, Duration::from_secs(put.ttl as u64))
+            .insert_with_ttl(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
             .await;
     }
     async fn get(&self, get: &DhtGet, response_socket: &Arc<Mutex<TcpStream>>) {
-        let key = &get.key;
-        match self.dht.get(key).await {
+        let hashed_key = P2pDht::hash_vec_bytes(&get.key);
+        match self.dht.get(&hashed_key).await {
             Some(value) => {
                 let header = ApiPacketHeader {
-                    size: 4 + key.len() as u16 + value.len() as u16,
+                    size: 4 + get.key.len() as u16 + value.len() as u16,
                     message_type: API_DHT_SUCCESS,
                 };
                 let mut buf = get_bincode_options().serialize(&header).unwrap();
-                buf.extend(key);
+                buf.extend(get.key);
                 buf.extend(value);
 
                 if let Err(e) = response_socket.lock().await.write_all(&buf).await {
@@ -159,11 +169,11 @@ impl P2pDht {
             }
             None => {
                 let header = ApiPacketHeader {
-                    size: 4 + key.len() as u16,
+                    size: 4 + get.key.len() as u16,
                     message_type: API_DHT_FAILURE,
                 };
                 let mut buf = get_bincode_options().serialize(&header).unwrap();
-                buf.extend(key);
+                buf.extend(get.key);
                 if let Err(e) = response_socket.lock().await.write_all(&buf).await {
                     eprintln!("Error writing to socket: {}", e);
                 }
