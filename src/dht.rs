@@ -11,7 +11,7 @@ pub struct SChord<K: Serialize, V: Serialize> {
 }
 
 impl<K: Serialize, V: Serialize> SChord<K, V> {
-    pub fn new(initial_peers: &[SocketAddr]) -> Self {
+    pub fn new(initial_peer: Option<SocketAddr>) -> Self {
         SChord {
             default_store_duration: Duration::from_secs(60),
             max_store_duration: Duration::from_secs(600),
