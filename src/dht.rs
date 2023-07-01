@@ -4,26 +4,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
+use num_traits::Bounded;
 use serde::Serialize;
 use tokio::net::TcpListener;
 
-pub struct SChord<
-    K: Serialize + Eq + Hash + Send + Sync + 'static,
-    V: Serialize + Send + Sync + 'static,
-> {
+pub struct SChord<K: SChordKey, V: SChordValue> {
     state: Arc<SChordState<K, V>>,
 }
 
-struct SChordState<
-    K: Serialize + Eq + Hash + Send + Sync + 'static,
-    V: Serialize + Send + Sync + 'static,
-> {
+struct SChordState<K: SChordKey, V: SChordValue> {
     default_store_duration: Duration,
     max_store_duration: Duration,
     local_storage: DashMap<K, V>,
 }
 
-impl<K: Serialize + Eq + Hash + Send + Sync, V: Serialize + Send + Sync> SChord<K, V> {
+impl<K: SChordKey, V: SChordValue> SChord<K, V> {
     fn start_server_socket(state: Arc<SChordState<K, V>>, server_address: SocketAddr) {
         tokio::spawn(async move {
             let listener = TcpListener::bind(&server_address)
@@ -60,3 +55,6 @@ impl<K: Serialize + Eq + Hash + Send + Sync, V: Serialize + Send + Sync> SChord<
         None
     }
 }
+
+pub trait SChordKey: Serialize + Eq + Hash + Bounded + Send + Sync + 'static {}
+pub trait SChordValue: Serialize + Send + Sync + 'static {}
