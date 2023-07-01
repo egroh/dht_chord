@@ -42,25 +42,11 @@ pub async fn send_and_receive() {
     }
 }
 
-pub async fn start_peer_server(
-    server_address: SocketAddr,
+pub async fn handle_incoming_stream(
+    mut stream: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(&server_address).await?;
-    println!("Peer Server listening on {}", server_address);
-
-    loop {
-        let (mut stream, _) = listener.accept().await?;
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(&mut stream).await {
-                eprintln!("Connection error: {}", err);
-            }
-        });
-    }
-}
-
-async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = [0u8; 1024];
-    let bytes_read = socket.read(&mut buffer).await?;
+    let bytes_read = stream.read(&mut buffer).await?;
     let request_bytes = &buffer[..bytes_read];
 
     let result: Result<PeerMessageEnum, _> = get_bincode_options().deserialize(request_bytes);
@@ -71,7 +57,7 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::er
                     message: "This is an answer".parse().unwrap(),
                 });
 
-                let response = socket
+                let response = stream
                     .write_all(&*get_bincode_options().serialize(&answer).unwrap())
                     .await?;
             }

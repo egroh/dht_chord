@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::peer_communication;
 use dashmap::DashMap;
 use num_traits::Bounded;
 use serde::Serialize;
@@ -29,7 +30,7 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let state = state.clone();
                 tokio::spawn(async move {
-                    todo!();
+                    peer_communication::handle_incoming_stream(stream).await?;
                 });
             }
         });
