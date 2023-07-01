@@ -11,7 +11,19 @@ pub struct PeerACK {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct JoinRequest {
+    // No further information needed
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct JoinSuccessful {
+    pub(crate) position: u128,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum PeerMessageEnum {
-    PeerHello(PeerHello),
-    PeerACK(PeerACK),
+    PeerHelloEnum(PeerHello),
+    PeerACKEnum(PeerACK),
+    JoinRequestEnum(JoinRequest),
+    JoinSuccessfulEnum(JoinSuccessful),
 }

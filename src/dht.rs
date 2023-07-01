@@ -43,6 +43,12 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
             local_storage: DashMap::new(),
         });
         SChord::start_server_socket(state.clone(), server_address);
+        match initial_peer {
+            None => {}
+            Some(peer) => {
+                
+            }
+        }
         SChord { state }
     }
 

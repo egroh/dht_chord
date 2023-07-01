@@ -1,26 +1,21 @@
 use crate::api_communication::get_bincode_options;
-use bincode::Options;
+use bincode::{Error, Options};
 use std::net::SocketAddr;
-use std::thread;
-use std::time::Duration;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 
 mod peer_messages;
-use crate::peer_communication::peer_messages::{PeerACK, PeerHello, PeerMessageEnum};
+use crate::peer_communication::peer_messages::PeerMessageEnum::JoinSuccessfulEnum;
+use crate::peer_communication::peer_messages::{JoinRequest, JoinSuccessful, PeerMessageEnum};
 
-pub async fn send_and_receive() {
-    let mut stream1 = TcpStream::connect("127.0.0.1:40000").await;
-    let mut stream = stream1.unwrap();
-
-    // Sending bytes
-    let message = PeerMessageEnum::PeerHello(PeerHello {
-        message: "This is a question".parse().unwrap(),
-    });
+async fn send_message(mut stream: &TcpStream, message: PeerMessageEnum) {
     stream
         .write_all(&*get_bincode_options().serialize(&message).unwrap())
-        .await;
+        .await?
+}
 
+async fn receive_message(mut stream: &TcpStream) -> Result<PeerMessageEnum, Error> {
     // Receiving response
     let mut buffer = vec![0; 1024];
     let bytes_read = stream.read(&mut buffer).await.unwrap();
@@ -29,15 +24,23 @@ pub async fn send_and_receive() {
     buffer.resize(bytes_read, 0);
 
     let result: Result<PeerMessageEnum, _> = get_bincode_options().deserialize(&*buffer);
-    match result {
-        Ok(peer_message_enum) => match peer_message_enum {
-            PeerMessageEnum::PeerACK(ack) => {
-                println!("Received ack {}", ack.message);
-            }
-            _ => {}
-        },
-        Err(err) => {
-            panic!();
+    return result;
+}
+
+pub async fn join(initial_peer: SocketAddr) {
+    let mut stream = TcpStream::connect(initial_peer).await?;
+
+    // Sending join request
+    send_message(&stream, PeerMessageEnum::JoinRequestEnum(JoinRequest {})).await?;
+
+    let answer = receive_message(&stream);
+    match answer {
+        PeerMessageEnum::JoinSuccessfulEnum(message) => {
+            println!("Joined at position {}", message.position);
+            todo!()
+        }
+        _ => {
+            panic!()
         }
     }
 }
@@ -45,26 +48,17 @@ pub async fn send_and_receive() {
 pub async fn handle_incoming_stream(
     mut stream: TcpStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffer = [0u8; 1024];
-    let bytes_read = stream.read(&mut buffer).await?;
-    let request_bytes = &buffer[..bytes_read];
-
-    let result: Result<PeerMessageEnum, _> = get_bincode_options().deserialize(request_bytes);
-    match result {
-        Ok(peer_message_enum) => match peer_message_enum {
-            PeerMessageEnum::PeerHello(_) => {
-                let answer = PeerMessageEnum::PeerACK(PeerACK {
-                    message: "This is an answer".parse().unwrap(),
-                });
-
-                let response = stream
-                    .write_all(&*get_bincode_options().serialize(&answer).unwrap())
-                    .await?;
+    let request = receive_message(&stream)?;
+    match request {
+        PeerMessageEnum::JoinRequestEnum(message) => {
+            if (true) {
+                send_message(&stream, JoinSuccessfulEnum(JoinSuccessful { position: 1 })).await?
+            } else {
+                todo!()
             }
-            _ => {}
-        },
-        Err(err) => {
-            panic!();
+        }
+        _ => {
+            panic!()
         }
     }
 
