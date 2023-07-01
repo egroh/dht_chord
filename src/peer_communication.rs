@@ -49,9 +49,9 @@ pub async fn start_peer_server(
     println!("Peer Server listening on {}", server_address);
 
     loop {
-        let (mut socket, _) = listener.accept().await?;
+        let (mut stream, _) = listener.accept().await?;
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(&mut socket).await {
+            if let Err(err) = handle_connection(&mut stream).await {
                 eprintln!("Connection error: {}", err);
             }
         });

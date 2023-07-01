@@ -134,7 +134,7 @@ impl P2pDht {
             max_store_duration,
             public_server_address,
             api_address,
-            dht: dht::SChord::new(initial_peer),
+            dht: dht::SChord::new(initial_peer, public_server_address),
         }
     }
     async fn put(&self, put: DhtPut) {
