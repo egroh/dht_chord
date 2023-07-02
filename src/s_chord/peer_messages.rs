@@ -11,18 +11,28 @@ pub(crate) struct PeerACK {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct JoinSuccessful {
-    pub(crate) position: u64,
+pub(crate) struct JoinRequest {
+    pub(crate) my_port_number: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct JoinSuccess {
+    pub(crate) assigned_position: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct JoinConnectBackRequest {
+    pub(crate) id: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum PeerMessage {
     PeerHello(PeerHello),
     PeerACK(PeerACK),
-    JoinRequest,
-    JoinSuccess(JoinSuccessful),
+    JoinRequest(JoinRequest),
+    JoinSuccess(JoinSuccess),
     JoinFailure,
-    JoinCompletionRequest,
-    JoinCompletionSuccess,
-    JoinCompletionFailure,
+    JoinConnectBackRequest(JoinConnectBackRequest),
+    JoinConnectBackSuccess,
+    JoinConnectBackFailure,
 }
