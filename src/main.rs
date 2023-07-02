@@ -8,19 +8,16 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::api_communication::with_big_endian;
 use bincode::Options;
+use distributed_hash_table::s_chord::s_chord::SChord;
 use ini::ini;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
-use crate::api_communication::with_big_endian;
-
-mod peer_communication;
-
 mod api_communication;
-mod dht;
 
 const API_DHT_PUT: u16 = 650;
 const API_DHT_GET: u16 = 651;
@@ -119,7 +116,7 @@ struct P2pDht {
     max_store_duration: Duration,
     public_server_address: SocketAddr,
     api_address: SocketAddr,
-    dht: dht::SChord<u64, Vec<u8>>,
+    dht: SChord<u64, Vec<u8>>,
 }
 
 impl P2pDht {
@@ -135,7 +132,7 @@ impl P2pDht {
             max_store_duration,
             public_server_address,
             api_address,
-            dht: dht::SChord::new(initial_peer, public_server_address),
+            dht: SChord::new(initial_peer, public_server_address),
         }
     }
 

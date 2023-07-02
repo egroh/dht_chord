@@ -1,24 +1,28 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct PeerHello {
+pub(crate) struct PeerHello {
     pub(crate) message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct PeerACK {
+pub(crate) struct PeerACK {
     pub(crate) message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct JoinSuccessful {
-    pub(crate) position: u128,
+pub(crate) struct JoinSuccessful {
+    pub(crate) position: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum PeerMessage {
+pub(crate) enum PeerMessage {
     PeerHello(PeerHello),
     PeerACK(PeerACK),
     JoinRequest,
-    JoinSuccessful(JoinSuccessful),
+    JoinSuccess(JoinSuccessful),
+    JoinFailure,
+    JoinCompletionRequest,
+    JoinCompletionSuccess,
+    JoinCompletionFailure,
 }

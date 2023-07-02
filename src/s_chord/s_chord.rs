@@ -3,12 +3,11 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::s_chord::peer_communication;
+use crate::s_chord::peer_communication::join;
 use dashmap::DashMap;
 use num_traits::Bounded;
 use serde::Serialize;
-
-use crate::peer_communication;
-use crate::peer_communication::join;
 
 pub struct SChord<K: SChordKey, V: SChordValue> {
     state: Arc<SChordState<K, V>>,
@@ -20,11 +19,17 @@ struct SChordState<K: SChordKey, V: SChordValue> {
     local_storage: DashMap<K, V>,
 }
 
+struct PeerConnection {
+    id: u64,
+    tx: (),
+    rx: (),
+}
+
 impl<K: SChordKey, V: SChordValue> SChord<K, V> {
     fn start_server_socket(state: Arc<SChordState<K, V>>, server_address: SocketAddr) {
         tokio::spawn(async move {
             let listener =
-                TcpListener::bind(&server_address).expect("Failed to bind SChord server socket");
+                TcpListener::bind(server_address).expect("Failed to bind SChord server socket");
             println!("SChord listening for peers on {}", server_address);
             loop {
                 let (stream, _address) = listener.accept().unwrap();
