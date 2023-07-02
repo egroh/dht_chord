@@ -1,13 +1,14 @@
 use std::hash::Hash;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::peer_communication;
 use dashmap::DashMap;
 use num_traits::Bounded;
 use serde::Serialize;
-use tokio::net::TcpListener;
+
+use crate::peer_communication;
+use crate::peer_communication::join;
 
 pub struct SChord<K: SChordKey, V: SChordValue> {
     state: Arc<SChordState<K, V>>,
@@ -22,15 +23,16 @@ struct SChordState<K: SChordKey, V: SChordValue> {
 impl<K: SChordKey, V: SChordValue> SChord<K, V> {
     fn start_server_socket(state: Arc<SChordState<K, V>>, server_address: SocketAddr) {
         tokio::spawn(async move {
-            let listener = TcpListener::bind(&server_address)
-                .await
-                .expect("Failed to bind SChord server socket");
+            let listener =
+                TcpListener::bind(&server_address).expect("Failed to bind SChord server socket");
             println!("SChord listening for peers on {}", server_address);
             loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
+                let (stream, _address) = listener.accept().unwrap();
                 let state = state.clone();
                 tokio::spawn(async move {
-                    peer_communication::handle_incoming_stream(stream).await?;
+                    peer_communication::accept_peer_connection(stream)
+                        .await
+                        .unwrap();
                 });
             }
         });
@@ -43,9 +45,12 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
             local_storage: DashMap::new(),
         });
         SChord::start_server_socket(state.clone(), server_address);
-        match initial_peer {
-            None => {}
-            Some(peer) => {}
+        if let Some(initial_peer) = initial_peer {
+            tokio::spawn(async move {
+                join(initial_peer)
+                    .await
+                    .expect("Failed to join SChord network");
+            });
         }
         SChord { state }
     }

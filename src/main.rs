@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
-use crate::api_communication::get_bincode_options;
+use crate::api_communication::with_big_endian;
 
 mod peer_communication;
 
@@ -90,13 +90,13 @@ impl ApiPacket {
                         if self.header.size < 4 + 4 + 32 + 1 {
                             return Err("Invalid size".into());
                         }
-                        self.message = ApiPacketMessage::Put(get_bincode_options().deserialize(v)?);
+                        self.message = ApiPacketMessage::Put(with_big_endian().deserialize(v)?);
                     }
                     API_DHT_GET => {
                         if self.header.size != 4 + 32 {
                             return Err("Invalid size".into());
                         }
-                        self.message = ApiPacketMessage::Get(get_bincode_options().deserialize(v)?);
+                        self.message = ApiPacketMessage::Get(with_big_endian().deserialize(v)?);
                     }
                     API_DHT_SHUTDOWN => {
                         if self.header.size != 4 {
@@ -159,7 +159,7 @@ impl P2pDht {
                     size: 4 + get.key.len() as u16 + value.len() as u16,
                     message_type: API_DHT_SUCCESS,
                 };
-                let mut buf = get_bincode_options().serialize(&header).unwrap();
+                let mut buf = with_big_endian().serialize(&header).unwrap();
                 buf.extend(get.key);
                 buf.extend(value);
 
@@ -172,7 +172,7 @@ impl P2pDht {
                     size: 4 + get.key.len() as u16,
                     message_type: API_DHT_FAILURE,
                 };
-                let mut buf = get_bincode_options().serialize(&header).unwrap();
+                let mut buf = with_big_endian().serialize(&header).unwrap();
                 buf.extend(get.key);
                 if let Err(e) = response_socket.lock().await.write_all(&buf).await {
                     eprintln!("Error writing to socket: {}", e);
@@ -256,7 +256,7 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
                             header_bytes.push(*byte);
                             if header_bytes.len() == 4 {
                                 if let Ok(header_success) =
-                                    get_bincode_options().deserialize(&header_bytes)
+                                    with_big_endian().deserialize(&header_bytes)
                                 {
                                     packet.header = header_success;
                                 } else {
