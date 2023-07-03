@@ -17,7 +17,7 @@ pub(crate) struct JoinRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct JoinSuccess {
-    pub(crate) assigned_position: u64,
+    pub(crate) assigned_id: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,7 +32,4 @@ pub(crate) enum PeerMessage {
     JoinRequest(JoinRequest),
     JoinSuccess(JoinSuccess),
     JoinFailure,
-    JoinConnectBackRequest(JoinConnectBackRequest),
-    JoinConnectBackSuccess,
-    JoinConnectBackFailure,
 }

@@ -5,9 +5,12 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::s_chord::peer_messages::{JoinRequest, JoinSuccess, PeerMessage};
+use crate::s_chord::peer_messages::{
+    JoinConnectBackRequest, JoinRequest, JoinSuccess, PeerMessage,
+};
 use dashmap::DashMap;
 use num_traits::Bounded;
+use parking_lot::RwLock;
 use serde::Serialize;
 use tokio::time::sleep;
 
@@ -18,8 +21,11 @@ pub struct SChord<K: SChordKey, V: SChordValue> {
 struct SChordState<K: SChordKey, V: SChordValue> {
     default_store_duration: Duration,
     max_store_duration: Duration,
+
+    node_id: RwLock<Option<u64>>,
+    swarm: DashMap<u64, PeerConnection>,
+
     local_storage: DashMap<K, V>,
-    connected_clients: DashMap<u64, PeerConnection>,
 }
 
 struct PeerConnection {
@@ -53,12 +59,17 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
     }
 
     pub fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {
+        let node_id = RwLock::new(None);
+        if initial_peer.is_none() {
+            *node_id.write() = Some(0);
+        }
         let s_chord = SChord {
             state: Arc::new(SChordState {
                 default_store_duration: Duration::from_secs(60),
                 max_store_duration: Duration::from_secs(600),
                 local_storage: DashMap::new(),
-                connected_clients: DashMap::new(),
+                swarm: DashMap::new(),
+                node_id,
             }),
         };
         s_chord.start_server_socket(server_address);
@@ -100,15 +111,8 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
         let answer: PeerMessage = rx.recv()?;
         match answer {
             PeerMessage::JoinSuccess(message) => {
-                println!("Joined at position {}", message.assigned_position);
-                let connection = PeerConnection {
-                    tx,
-                    rx,
-                    connected_back: false,
-                };
-                self.state
-                    .connected_clients
-                    .insert(message.assigned_position, connection);
+                println!("Joined at position {}", message.assigned_id);
+                *self.state.node_id.write() = Some(message.assigned_id);
                 Ok(())
             }
             _ => {
@@ -124,32 +128,22 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
         connecting_address: SocketAddr,
     ) -> Result<(), Box<dyn Error>> {
         let (mut tx, mut rx) = channels::channel(stream.try_clone()?, stream);
+        let mut id_of_peer = None;
         loop {
             let request: PeerMessage = rx.recv()?;
             match request {
                 PeerMessage::JoinRequest(jr) => {
-                    // todo: prevent double joins
-                    let assigned_position = 0; // todo: calculate this
-                    tx.send(PeerMessage::JoinSuccess(JoinSuccess { assigned_position }))?;
-                    sleep(Duration::from_millis(100)).await; // Client has 100ms to prepare for connect back
-                    todo!("Connect back to client");
-                }
-                PeerMessage::JoinConnectBackRequest(cbr) => {
-                    match self.state.connected_clients.get_mut(&cbr.id) {
-                        Some(mut entry) => {
-                            if entry.connected_back {
-                                tx.send(PeerMessage::JoinConnectBackFailure)?;
-                                return Ok(());
-                            } else {
-                                entry.connected_back = true;
-                                tx.send(PeerMessage::JoinConnectBackSuccess)?;
-                            }
-                        }
-                        None => {
-                            tx.send(PeerMessage::JoinConnectBackFailure)?;
-                            return Ok(());
-                        }
+                    let my_id = *self.state.node_id.read();
+                    if id_of_peer.is_some() || my_id.is_none() {
+                        tx.send(PeerMessage::JoinFailure)?;
+                        return Ok(());
                     }
+                    let assigned_position = 0; // todo: calculate this
+                    id_of_peer = Some(assigned_position);
+                    tx.send(PeerMessage::JoinSuccess(JoinSuccess {
+                        assigned_id: assigned_position,
+                    }))?;
+                    todo!("Swarm needs to inform center (of new peer) of new peer");
                 }
                 _ => {
                     panic!("Unexpected message type");
