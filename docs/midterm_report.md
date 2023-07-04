@@ -19,37 +19,45 @@
      - We are using Rust channels for inter-node communication (this allows us to serialize/deserialize entire structs typesafe and integrity checked)
      - All inter-node messages will be specified in peer_messages.rs (this is still work in progress)
      - Rust forces us to handle all possible errors at all stages of our program. If we encounter an error in the communication with a node at any stage, we will gracefully terminate our connection with that node.
+
+     1. API Messages
    
+        As specified in the assignment for DHT, we should accept and process the following requests:
+   
+        - DHT PUT
+        - DHT GET
+        - DHT SUCCESS
+        - DHT FAILURE
+        
+        We introduced an additional API Message, `DHT SHUTDOWN` which allows us to shut down a node gracefully through the API.
+        The package has a fixed size and does not contain any other information:
+        ```
+        +--------+--------+--------+--------+
+        |        4        |  DHT SHUTDOWN   |
+        +--------+--------+--------+--------+
+        ```
 
-### API Messages
-As specified in the assignment for DHT, we should accept and process the following requests:
+    2. P2P Messages
+   
+       We employ the following messages in our peer to peer communication
 
-- DHT PUT
-- DHT GET
-- DHT SUCCESS
-- DHT FAILURE
+       - JoinRequest
+       - JoinSuccess
+       - JoinFailure
+       - 
 
-We introduced an additional API Message, `DHT SHUTDOWN` which allows us to shut down a node gracefully through the API.
-The package has a fixed size and does not contain any other information:
-```
-+--------+--------+--------+--------+
-|        4        |  DHT SHUTDOWN   |
-+--------+--------+--------+--------+
-```
+4. Future Work
 
-### P2P Messages
+   - Proper Node Joining: Currently the join implementation does not fully work yet
+   - Stabilization and Finger Table update: Due to the non-working join method, we are unable to test the stabilize system
 
-- JoinRequest
-- JoinSuccess
-- JoinFailure
-- 
+5. Workload Distribution
 
-1. Future Work
+    It is difficult to describe the work distribution on a macro scale, as we often work together simultaneously (Pair Programming).
+   Valentin primarily focuses on writing the actual code, leveraging his extensive experience as a Rust programmer. On the other hand, Eddie's role involves transforming the Pseudocode into functions that align with our architecture.
 
-2. Workload Distribution
+6. Effort spent for the project
+   - We spend a lot of time on the initial design, as it is crucial to ensure we have a good architectural design, as this will otherwise cost us lots of time in the long run
+   - Another substantial effort was spent on trying to build a good architecture for SChord, especially for the exhaustive communication infrastructure between the nodes.
    - 
-
-3. Effort spent for the project
-   - Eddie writes things that actually works
-   - Valentin then deletes those things and replaces them with stuff that does not work but is idiomatic Rust
 
