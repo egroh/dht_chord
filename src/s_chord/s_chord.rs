@@ -11,6 +11,7 @@ use crate::s_chord::peer_messages::{
 use dashmap::DashMap;
 use num_traits::Bounded;
 use parking_lot::RwLock;
+use rand::Rng;
 use serde::Serialize;
 use tokio::time::sleep;
 
@@ -138,7 +139,7 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
                         tx.send(PeerMessage::JoinFailure)?;
                         return Ok(());
                     }
-                    let assigned_position = 0; // todo: calculate this
+                    let assigned_position = rand::thread_rng().gen(); // todo: calculate this multiparty
                     id_of_peer = Some(assigned_position);
                     tx.send(PeerMessage::JoinSuccess(JoinSuccess {
                         assigned_id: assigned_position,
