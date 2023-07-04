@@ -1,16 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct PeerHello {
-    pub(crate) message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct PeerACK {
-    pub(crate) message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct JoinRequest {
     pub(crate) my_port_number: u16,
 }
@@ -27,8 +17,6 @@ pub(crate) struct JoinConnectBackRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum PeerMessage {
-    PeerHello(PeerHello),
-    PeerACK(PeerACK),
     JoinRequest(JoinRequest),
     JoinSuccess(JoinSuccess),
     JoinFailure,
