@@ -44,7 +44,9 @@
        - JoinRequest
        - JoinSuccess
        - JoinFailure
-       - 
+       - GetSuccessor
+       - KeyValueAnswer
+       - ValueRequest
 
 4. Future Work
 
