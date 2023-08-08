@@ -13,7 +13,7 @@ use num_traits::Bounded;
 use parking_lot::RwLock;
 use rand::Rng;
 use serde::Serialize;
-use tokio::time::sleep;
+use tokio::task::JoinHandle;
 
 pub struct SChord<K: SChordKey, V: SChordValue> {
     state: Arc<SChordState<K, V>>,
@@ -36,7 +36,7 @@ struct PeerConnection {
 }
 
 impl<K: SChordKey, V: SChordValue> SChord<K, V> {
-    fn start_server_socket(&self, server_address: SocketAddr) {
+    pub fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
         let self_clone = SChord {
             state: self.state.clone(),
         };
@@ -56,7 +56,7 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
                         .unwrap();
                 });
             }
-        });
+        })
     }
 
     pub fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {
@@ -73,7 +73,6 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
                 node_id,
             }),
         };
-        s_chord.start_server_socket(server_address);
         if let Some(initial_peer) = initial_peer {
             let s_chord = SChord {
                 state: s_chord.state.clone(),

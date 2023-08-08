@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 mod api_communication;
 
@@ -34,6 +35,8 @@ struct ApiPacketHeader {
 enum ApiPacketMessage {
     Put(DhtPut),
     Get(DhtGet),
+    Failure(DhtFailure),
+    Success(DhtSuccess),
     Shutdown,
     Unparsed(Vec<u8>),
 }
@@ -52,13 +55,13 @@ struct DhtGet {
     key: [u8; 32],
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct DhtSuccess {
     key: [u8; 32],
     value: Vec<u8>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct DhtFailure {
     key: [u8; 32],
 }
@@ -101,6 +104,18 @@ impl ApiPacket {
                         }
                         self.message = ApiPacketMessage::Shutdown;
                     }
+                    API_DHT_FAILURE => {
+                        if self.header.size != 4 + 32 {
+                            return Err("Invalid size".into());
+                        }
+                        self.message = ApiPacketMessage::Failure(with_big_endian().deserialize(v)?);
+                    }
+                    API_DHT_SUCCESS => {
+                        if self.header.size != 4 + 32 {
+                            return Err("Invalid size".into());
+                        }
+                        self.message = ApiPacketMessage::Success(with_big_endian().deserialize(v)?);
+                    }
                     _ => return Err("Unknown message type".into()),
                 }
             }
@@ -117,6 +132,7 @@ struct P2pDht {
     public_server_address: SocketAddr,
     api_address: SocketAddr,
     dht: SChord<u64, Vec<u8>>,
+    server_thread: JoinHandle<()>,
 }
 
 impl P2pDht {
@@ -127,13 +143,20 @@ impl P2pDht {
         api_address: SocketAddr,
         initial_peer: Option<SocketAddr>,
     ) -> Self {
+        let chord = SChord::new(initial_peer, public_server_address);
+        let thread = chord.start_server_socket(public_server_address);
         P2pDht {
             default_store_duration,
             max_store_duration,
             public_server_address,
             api_address,
-            dht: SChord::new(initial_peer, public_server_address),
+            dht: chord,
+            server_thread: thread,
         }
+    }
+
+    fn shutdown(&self) {
+        self.server_thread.abort();
     }
 
     fn hash_vec_bytes(vec_bytes: &[u8]) -> u64 {
@@ -148,7 +171,7 @@ impl P2pDht {
             .insert_with_ttl(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
             .await;
     }
-    async fn get(&self, get: &DhtGet, response_socket: &Arc<Mutex<TcpStream>>) {
+    async fn get(&self, get: &DhtGet, response_stream: &Arc<Mutex<TcpStream>>) {
         let hashed_key = P2pDht::hash_vec_bytes(&get.key);
         match self.dht.get(&hashed_key).await {
             Some(value) => {
@@ -160,7 +183,7 @@ impl P2pDht {
                 buf.extend(get.key);
                 buf.extend(value);
 
-                if let Err(e) = response_socket.lock().await.write_all(&buf).await {
+                if let Err(e) = response_stream.lock().await.write_all(&buf).await {
                     eprintln!("Error writing to socket: {}", e);
                 }
             }
@@ -171,7 +194,8 @@ impl P2pDht {
                 };
                 let mut buf = with_big_endian().serialize(&header).unwrap();
                 buf.extend(get.key);
-                if let Err(e) = response_socket.lock().await.write_all(&buf).await {
+
+                if let Err(e) = response_stream.lock().await.write_all(&buf).await {
                     eprintln!("Error writing to socket: {}", e);
                 }
             }
@@ -228,11 +252,12 @@ fn create_dht_from_command_line_arguments() -> P2pDht {
 
 async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
     let api_listener = TcpListener::bind(dht.api_address).await?;
+    println!("Listening for API Calls on {}", dht.api_address);
     let dht = Arc::new(dht);
     loop {
-        let (socket, _socket_address) = api_listener.accept().await?;
+        let (stream, _socket_address) = api_listener.accept().await?;
         let dht = Arc::clone(&dht);
-        let socket = Arc::new(Mutex::new(socket));
+        let stream = Arc::new(Mutex::new(stream));
         tokio::spawn(async move {
             let connection_result = async move || -> Result<(), Box<dyn Error>> {
                 let mut buf = [0; 1024];
@@ -242,7 +267,7 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
 
                 // Read data from socket
                 loop {
-                    let n = match socket.lock().await.read(&mut buf).await {
+                    let n = match stream.lock().await.read(&mut buf).await {
                         // socket closed
                         Ok(n) if n == 0 => return Ok(()),
                         Ok(n) => n,
@@ -273,17 +298,20 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
                                 }
                                 ApiPacketMessage::Get(g) => {
                                     let dht = dht.clone();
-                                    let socket = socket.clone();
-                                    tokio::spawn(async move {
-                                        dht.get(&g, &socket).await;
-                                    });
+                                    let stream = stream.clone();
+
+                                    //tokio::spawn(async move {
+                                    dht.get(&g, &stream).await;
+                                    //});
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
                                 ApiPacketMessage::Shutdown => {
+                                    dht.shutdown();
                                     return Ok(());
                                 }
                                 ApiPacketMessage::Unparsed(_) => {}
+                                _ => {}
                             }
                         }
                     }
@@ -330,4 +358,68 @@ async fn test_main() {
 
     handle_0.await.unwrap();
     handle_1.await.unwrap();
+}
+
+#[derive(Deserialize, Debug)]
+struct Failure {
+    header: ApiPacketHeader,
+    payload: DhtFailure,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_api_get() {
+    let dht_0 = P2pDht::new(
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+        "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
+        "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
+        None,
+    );
+
+    let handle_0 = tokio::spawn(async move {
+        start_dht(dht_0).await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut stream = TcpStream::connect("127.0.0.1:3000".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+
+    println!("Connected to API");
+
+    let key = [
+        0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
+        0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
+    ];
+    let header = ApiPacketHeader {
+        size: 4 + key.len() as u16,
+        message_type: API_DHT_GET,
+    };
+
+    let mut buf = with_big_endian().serialize(&header).unwrap();
+    buf.extend(key);
+
+    println!("Send Get Request");
+    let _ = stream.write_all(&buf).await;
+
+    println!("Receiving");
+
+    let bytes_read = stream.read(&mut buf).await.unwrap();
+    println!("Read");
+    let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
+
+    println!("received_data {:?}", received_data);
+
+    let buf = with_big_endian()
+        .serialize(&ApiPacketHeader {
+            size: 4,
+            message_type: API_DHT_SHUTDOWN,
+        })
+        .unwrap();
+
+    let _ = stream.write_all(&buf).await;
+
+    handle_0.abort();
+
+    assert!(handle_0.await.unwrap_err().is_cancelled())
 }
