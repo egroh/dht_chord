@@ -136,14 +136,14 @@ struct P2pDht {
 }
 
 impl P2pDht {
-    fn new(
+    async fn new(
         default_store_duration: Duration,
         max_store_duration: Duration,
         public_server_address: SocketAddr,
         api_address: SocketAddr,
         initial_peer: Option<SocketAddr>,
     ) -> Self {
-        let chord = SChord::new(initial_peer, public_server_address);
+        let chord = SChord::new(initial_peer, public_server_address).await;
         let thread = chord.start_server_socket(public_server_address);
         P2pDht {
             default_store_duration,
@@ -153,10 +153,6 @@ impl P2pDht {
             dht: chord,
             server_thread: thread,
         }
-    }
-
-    fn shutdown(&self) {
-        self.server_thread.abort();
     }
 
     fn hash_vec_bytes(vec_bytes: &[u8]) -> u64 {
@@ -203,7 +199,7 @@ impl P2pDht {
     }
 }
 
-fn create_dht_from_command_line_arguments() -> P2pDht {
+async fn create_dht_from_command_line_arguments() -> P2pDht {
     let args = env::args().collect::<Vec<String>>();
     assert!(args.len() >= 2);
     assert_eq!(args[1], "-c");
@@ -248,6 +244,7 @@ fn create_dht_from_command_line_arguments() -> P2pDht {
         api_address,
         initial_peer,
     )
+    .await
 }
 
 async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
@@ -299,15 +296,14 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
                                 ApiPacketMessage::Get(g) => {
                                     let dht = dht.clone();
                                     let stream = stream.clone();
-
-                                    //tokio::spawn(async move {
-                                    dht.get(&g, &stream).await;
-                                    //});
+                                    tokio::spawn(async move {
+                                        dht.get(&g, &stream).await;
+                                    });
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
                                 ApiPacketMessage::Shutdown => {
-                                    dht.shutdown();
+                                    // todo: shutdown dht server
                                     return Ok(());
                                 }
                                 ApiPacketMessage::Unparsed(_) => {}
@@ -327,7 +323,7 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // todo: RPS communication for bootstrap peers or get from config file
-    start_dht(create_dht_from_command_line_arguments()).await
+    start_dht(create_dht_from_command_line_arguments().await).await
 }
 
 #[tokio::test]
@@ -338,7 +334,8 @@ async fn test_main() {
         "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
         "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
         None,
-    );
+    )
+    .await;
 
     let handle_0 = tokio::spawn(async move {
         start_dht(dht_0).await.unwrap();
@@ -350,7 +347,8 @@ async fn test_main() {
         "127.0.0.1:40001".parse::<SocketAddr>().unwrap(),
         "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
         Some("127.0.0.1:40000".parse::<SocketAddr>().unwrap()),
-    );
+    )
+    .await;
 
     let handle_1 = tokio::spawn(async move {
         start_dht(dht_1).await.unwrap();
@@ -374,7 +372,8 @@ async fn test_api_get() {
         "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
         "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
         None,
-    );
+    )
+    .await;
 
     let handle_0 = tokio::spawn(async move {
         start_dht(dht_0).await.unwrap();
