@@ -111,16 +111,22 @@ impl<K: SChordKey, V: SChordValue> SChord<K, V> {
             let request: PeerMessage = rx.recv().await?;
             match request {
                 PeerMessage::GetNode(id) => {
-                    let response_node_key = self.state.finger_table[0].read().0;
-                    let response_node_address = self.state.finger_table[0].read().1.ip();
-                    let response_node_port = self.state.finger_table[0].read().1.port();
+                    let diff = id.wrapping_sub(self.state.node_id);
+                    let entry = diff.leading_zeros();
+                    let finger_table_index = usize::try_from(entry).unwrap();
+
+                    let response_node_key = self.state.finger_table[finger_table_index].read().0;
+                    let response_node_address =
+                        self.state.finger_table[finger_table_index].read().1.ip();
+                    let response_node_port =
+                        self.state.finger_table[finger_table_index].read().1.port();
                     tx.send(PeerMessage::GetNodeResponse(
                         response_node_key,
                         response_node_address,
                         response_node_port,
                     ))
                     .await?;
-                    todo!("GetNode");
+                    todo!("Check if we own key");
                 }
                 _ => {
                     panic!("Unexpected message type");
