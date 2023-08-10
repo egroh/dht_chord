@@ -131,7 +131,7 @@ struct P2pDht {
     max_store_duration: Duration,
     public_server_address: SocketAddr,
     api_address: SocketAddr,
-    dht: SChord<u64, Vec<u8>>,
+    dht: SChord,
     server_thread: JoinHandle<()>,
 }
 
@@ -169,7 +169,7 @@ impl P2pDht {
     }
     async fn get(&self, get: &DhtGet, response_stream: &Arc<Mutex<TcpStream>>) {
         let hashed_key = P2pDht::hash_vec_bytes(&get.key);
-        match self.dht.get(&hashed_key).await {
+        match self.dht.get(hashed_key).await {
             Some(value) => {
                 let header = ApiPacketHeader {
                     size: 4 + get.key.len() as u16 + value.len() as u16,
