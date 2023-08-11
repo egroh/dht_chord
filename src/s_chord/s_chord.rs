@@ -1,15 +1,11 @@
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-
-use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
-use num_traits::Bounded;
-use parking_lot::RwLock;
-use serde::Serialize;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
@@ -24,9 +20,17 @@ struct SChordState {
     max_store_duration: Duration,
 
     node_id: u64,
-    finger_table: Vec<RwLock<(u64, SocketAddr)>>,
+    address: SocketAddr,
+    finger_table: Vec<RwLock<ChordPeer>>,
+    successors: Vec<ChordPeer>,
+    predecessors: Vec<ChordPeer>,
 
     local_storage: DashMap<u64, Vec<u8>>,
+}
+
+struct ChordPeer {
+    id: u64,
+    address: SocketAddr,
 }
 
 impl SChord {
@@ -58,8 +62,13 @@ impl SChord {
         let mut hasher = DefaultHasher::new();
         server_address.hash(&mut hasher);
         let node_id = hasher.finish();
-        let finger_table: Vec<RwLock<(u64, SocketAddr)>> = (0..63)
-            .map(|_| RwLock::new((node_id, server_address)))
+        let finger_table: Vec<RwLock<ChordPeer>> = (0..63)
+            .map(|_| {
+                RwLock::new(ChordPeer {
+                    id: node_id,
+                    address: server_address,
+                })
+            })
             .collect();
         if let Some(initial_peer) = initial_peer {
             let mut stream = TcpStream::connect(initial_peer).await.unwrap();
@@ -71,7 +80,10 @@ impl SChord {
                     .unwrap();
                 match rx.recv().await.unwrap() {
                     PeerMessage::GetNodeResponse(id, ip, port) => {
-                        *entry.write() = (id, SocketAddr::new(ip, port));
+                        *entry.write() = ChordPeer {
+                            id,
+                            address: SocketAddr::new(ip, port),
+                        };
                     }
                     _ => {
                         panic!("Unexpected response to get_node from initial peer");
@@ -85,7 +97,10 @@ impl SChord {
                 max_store_duration: Duration::from_secs(600),
                 local_storage: DashMap::new(),
                 finger_table,
+                successors: vec![],
                 node_id,
+                predecessors: vec![],
+                address: server_address,
             }),
         }
     }
@@ -115,22 +130,35 @@ impl SChord {
             let request: PeerMessage = rx.recv().await?;
             match request {
                 PeerMessage::GetNode(id) => {
-                    let diff = id.wrapping_sub(self.state.node_id);
-                    let entry = diff.leading_zeros();
-                    let finger_table_index = usize::try_from(entry).unwrap();
+                    if id <= self.state.node_id && id > self.state.predecessors[0].id {
+                        tx.send(PeerMessage::GetNodeResponse(
+                            self.state.node_id,
+                            self.state.address.ip(),
+                            self.state.address.port(),
+                        ))
+                        .await?;
+                    } else {
+                        let diff = id.wrapping_sub(self.state.node_id);
+                        let entry = diff.leading_zeros();
+                        let finger_table_index = usize::try_from(entry).unwrap();
 
-                    let response_node_key = self.state.finger_table[finger_table_index].read().0; // todo: we should probably only lock once
-                    let response_node_address =
-                        self.state.finger_table[finger_table_index].read().1.ip();
-                    let response_node_port =
-                        self.state.finger_table[finger_table_index].read().1.port();
-                    tx.send(PeerMessage::GetNodeResponse(
-                        response_node_key,
-                        response_node_address,
-                        response_node_port,
-                    ))
-                    .await?;
-                    todo!("Check if we own key");
+                        let response_node_id =
+                            self.state.finger_table[finger_table_index].read().id; // todo: we should probably only lock once
+                        let response_node_address = self.state.finger_table[finger_table_index]
+                            .read()
+                            .address
+                            .ip();
+                        let response_node_port = self.state.finger_table[finger_table_index]
+                            .read()
+                            .address
+                            .port();
+                        tx.send(PeerMessage::GetNodeResponse(
+                            response_node_id,
+                            response_node_address,
+                            response_node_port,
+                        ))
+                        .await?;
+                    }
                 }
                 PeerMessage::GetValue(key) => {
                     tx.send(PeerMessage::GetValueResponse(
