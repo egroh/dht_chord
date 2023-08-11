@@ -22,8 +22,8 @@ struct SChordState {
     node_id: u64,
     address: SocketAddr,
     finger_table: Vec<RwLock<ChordPeer>>,
-    successors: Vec<ChordPeer>,
-    predecessors: Vec<ChordPeer>,
+    successors: Vec<RwLock<ChordPeer>>,
+    predecessors: Vec<RwLock<ChordPeer>>,
 
     local_storage: DashMap<u64, Vec<u8>>,
 }
@@ -130,7 +130,7 @@ impl SChord {
             let request: PeerMessage = rx.recv().await?;
             match request {
                 PeerMessage::GetNode(id) => {
-                    if id <= self.state.node_id && id > self.state.predecessors[0].id {
+                    if id <= self.state.node_id && id > self.state.predecessors[0].read().id {
                         tx.send(PeerMessage::GetNodeResponse(
                             self.state.node_id,
                             self.state.address.ip(),
