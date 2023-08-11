@@ -8,17 +8,18 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::api_communication::with_big_endian;
 use bincode::Options;
-use distributed_hash_table::s_chord::s_chord::SChord;
 use ini::ini;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
+
+use distributed_hash_table::s_chord::s_chord::SChord;
+
+use crate::api_communication::with_big_endian;
 
 mod api_communication;
 
@@ -329,94 +330,109 @@ async fn main() -> Result<(), Box<dyn Error>> {
     start_dht(create_dht_from_command_line_arguments().await).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_main() {
-    let dht_0 = P2pDht::new(
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-        "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
-        "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-        None,
-    )
-    .await;
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+    use std::time::Duration;
 
-    let handle_0 = tokio::spawn(async move {
-        start_dht(dht_0).await.unwrap();
-    });
+    use bincode::Options;
+    use serde::Deserialize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+    use tokio::time::sleep;
 
-    let dht_1 = P2pDht::new(
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-        "127.0.0.1:40001".parse::<SocketAddr>().unwrap(),
-        "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-        Some("127.0.0.1:40000".parse::<SocketAddr>().unwrap()),
-    )
-    .await;
+    use crate::api_communication::with_big_endian;
+    use crate::{start_dht, ApiPacketHeader, DhtFailure, P2pDht, API_DHT_GET, API_DHT_SHUTDOWN};
 
-    let handle_1 = tokio::spawn(async move {
-        start_dht(dht_1).await.unwrap();
-    });
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_main() {
+        let dht_0 = P2pDht::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
+            None,
+        )
+        .await;
 
-    handle_0.await.unwrap();
-    handle_1.await.unwrap();
-}
+        let handle_0 = tokio::spawn(async move {
+            start_dht(dht_0).await.unwrap();
+        });
 
-#[derive(Deserialize, Debug)]
-struct Failure {
-    header: ApiPacketHeader,
-    payload: DhtFailure,
-}
+        let dht_1 = P2pDht::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            "127.0.0.1:40001".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
+            Some("127.0.0.1:40000".parse::<SocketAddr>().unwrap()),
+        )
+        .await;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_api_get() {
-    let dht_0 = P2pDht::new(
-        Duration::from_secs(60),
-        Duration::from_secs(60),
-        "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
-        "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-        None,
-    )
-    .await;
+        let handle_1 = tokio::spawn(async move {
+            start_dht(dht_1).await.unwrap();
+        });
 
-    let handle_0 = tokio::spawn(async move {
-        start_dht(dht_0).await.unwrap();
-    });
+        handle_0.await.unwrap();
+        handle_1.await.unwrap();
+    }
 
-    // Wait for socket to open
-    sleep(Duration::from_secs(1)).await;
+    #[derive(Deserialize, Debug)]
+    struct Failure {
+        header: ApiPacketHeader,
+        payload: DhtFailure,
+    }
 
-    let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_api_get() {
+        let dht_0 = P2pDht::new(
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
+            None,
+        )
+        .await;
 
-    println!("Connected to API");
+        let handle_0 = tokio::spawn(async move {
+            start_dht(dht_0).await.unwrap();
+        });
 
-    let key = [0x1; 32];
-    let header = ApiPacketHeader {
-        size: 4 + key.len() as u16,
-        message_type: API_DHT_GET,
-    };
+        // Wait for socket to open
+        sleep(Duration::from_secs(1)).await;
 
-    let mut buf = with_big_endian().serialize(&header).unwrap();
-    buf.extend(key);
+        let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
 
-    println!("Sending get request");
-    stream.write_all(&buf).await.unwrap();
-    println!("Awaiting answer to get request");
-    let bytes_read = stream.read(&mut buf).await.unwrap();
+        println!("Connected to API");
 
-    let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
+        let key = [0x1; 32];
+        let header = ApiPacketHeader {
+            size: 4 + key.len() as u16,
+            message_type: API_DHT_GET,
+        };
 
-    println!("Data received: {:?}", received_data);
+        let mut buf = with_big_endian().serialize(&header).unwrap();
+        buf.extend(key);
 
-    let buf = with_big_endian()
-        .serialize(&ApiPacketHeader {
-            size: 4,
-            message_type: API_DHT_SHUTDOWN,
-        })
-        .unwrap();
+        println!("Sending get request");
+        stream.write_all(&buf).await.unwrap();
+        println!("Awaiting answer to get request");
+        let bytes_read = stream.read(&mut buf).await.unwrap();
 
-    stream.write_all(&buf).await.unwrap();
+        let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
 
-    handle_0.abort();
+        println!("Data received: {:?}", received_data);
 
-    assert!(handle_0.await.unwrap_err().is_cancelled())
+        let buf = with_big_endian()
+            .serialize(&ApiPacketHeader {
+                size: 4,
+                message_type: API_DHT_SHUTDOWN,
+            })
+            .unwrap();
+
+        stream.write_all(&buf).await.unwrap();
+
+        handle_0.abort();
+
+        assert!(handle_0.await.unwrap_err().is_cancelled())
+    }
 }
