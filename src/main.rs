@@ -326,7 +326,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     start_dht(create_dht_from_command_line_arguments().await).await
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_main() {
     let dht_0 = P2pDht::new(
         Duration::from_secs(60),
@@ -364,7 +364,7 @@ struct Failure {
     payload: DhtFailure,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_api_get() {
     let dht_0 = P2pDht::new(
         Duration::from_secs(60),
