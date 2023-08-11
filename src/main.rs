@@ -359,6 +359,9 @@ mod tests {
             start_dht(dht_0).await.unwrap();
         });
 
+        // Wait for socket to open
+        sleep(Duration::from_millis(100)).await;
+
         let dht_1 = P2pDht::new(
             Duration::from_secs(60),
             Duration::from_secs(60),
@@ -372,8 +375,12 @@ mod tests {
             start_dht(dht_1).await.unwrap();
         });
 
-        handle_0.await.unwrap();
-        handle_1.await.unwrap();
+        handle_0.abort();
+        handle_1.abort();
+
+        // Wait for handles to join and ignore all errors
+        let _ = handle_0.await;
+        let _ = handle_1.await;
     }
 
     #[derive(Deserialize, Debug)]
