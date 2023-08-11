@@ -14,9 +14,11 @@ use distributed_hash_table::s_chord::s_chord::SChord;
 use ini::ini;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 mod api_communication;
 
@@ -167,7 +169,7 @@ impl P2pDht {
             .insert_with_ttl(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
             .await;
     }
-    async fn get(&self, get: &DhtGet, response_stream: &Arc<Mutex<TcpStream>>) {
+    async fn get(&self, get: &DhtGet, response_stream: &Arc<Mutex<OwnedWriteHalf>>) {
         let hashed_key = P2pDht::hash_vec_bytes(&get.key);
         match self.dht.get(hashed_key).await {
             Some(value) => {
@@ -254,7 +256,8 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
     loop {
         let (stream, _socket_address) = api_listener.accept().await?;
         let dht = Arc::clone(&dht);
-        let stream = Arc::new(Mutex::new(stream));
+        let (mut reader, writer) = stream.into_split();
+        let writer = Arc::new(Mutex::new(writer));
         tokio::spawn(async move {
             let connection_result = async move || -> Result<(), Box<dyn Error>> {
                 let mut buf = [0; 1024];
@@ -264,7 +267,7 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
 
                 // Read data from socket
                 loop {
-                    let n = match stream.lock().await.read(&mut buf).await {
+                    let n = match reader.read(&mut buf).await {
                         // socket closed
                         Ok(n) if n == 0 => return Ok(()),
                         Ok(n) => n,
@@ -295,12 +298,10 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
                                 }
                                 ApiPacketMessage::Get(g) => {
                                     let dht = dht.clone();
-                                    let stream = stream.clone();
+                                    let writer = writer.clone();
                                     tokio::spawn(async move {
-                                        dht.get(&g, &stream).await;
-                                    })
-                                    .await // todo: why is this await needed?
-                                    .unwrap();
+                                        dht.get(&g, &writer).await;
+                                    });
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
@@ -381,6 +382,9 @@ async fn test_api_get() {
         start_dht(dht_0).await.unwrap();
     });
 
+    // Wait for socket to open
+    sleep(Duration::from_secs(1)).await;
+
     let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
 
     println!("Connected to API");
@@ -415,42 +419,4 @@ async fn test_api_get() {
     handle_0.abort();
 
     assert!(handle_0.await.unwrap_err().is_cancelled())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_minimal() {
-    tokio::spawn(async move {
-        listen().await.unwrap();
-    });
-
-    let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
-
-    stream.write_all(&[0x1; 4]).await.unwrap();
-    let mut buf = [0; 1024];
-    let bytes_read = stream.read(&mut buf).await.unwrap();
-    assert_eq!(bytes_read, 4);
-}
-
-async fn listen() -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
-    loop {
-        let (mut stream, _socket_address) = listener.accept().await?;
-        tokio::spawn(async move {
-            let connection_result = async move || -> Result<(), Box<dyn Error>> {
-                let mut buf = [0; 1024];
-                let n = match stream.read(&mut buf).await {
-                    // socket closed
-                    Ok(n) if n == 0 => return Ok(()),
-                    Ok(n) => n,
-                    Err(e) => return Err(e.into()),
-                };
-                println!("Received {} bytes", n);
-                tokio::spawn(async move {
-                    stream.write_all(&buf[0..n]).await.unwrap();
-                });
-                Ok(())
-            };
-            connection_result().await.unwrap();
-        });
-    }
 }
