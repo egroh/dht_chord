@@ -20,7 +20,7 @@ struct SChordState {
     max_store_duration: Duration,
 
     node_id: u64,
-    address: SocketAddr,
+    my_address: SocketAddr,
     finger_table: Vec<RwLock<ChordPeer>>,
     successors: Vec<RwLock<ChordPeer>>,
     predecessors: Vec<RwLock<ChordPeer>>,
@@ -75,9 +75,11 @@ impl SChord {
             let (reader, writer) = stream.split();
             let (mut tx, mut rx) = channels::channel(reader, writer);
             for (i, entry) in finger_table.iter().enumerate() {
-                tx.send(PeerMessage::GetNode(node_id + 2u64.pow(i as u32)))
-                    .await
-                    .unwrap();
+                tx.send(PeerMessage::GetNode(
+                    node_id.wrapping_add(2u64.pow(i as u32)),
+                ))
+                .await
+                .unwrap();
                 match rx.recv().await.unwrap() {
                     PeerMessage::GetNodeResponse(id, ip, port) => {
                         *entry.write() = ChordPeer {
@@ -100,7 +102,7 @@ impl SChord {
                 successors: vec![],
                 node_id,
                 predecessors: vec![],
-                address: server_address,
+                my_address: server_address,
             }),
         }
     }
@@ -133,8 +135,8 @@ impl SChord {
                     if id <= self.state.node_id && id > self.state.predecessors[0].read().id {
                         tx.send(PeerMessage::GetNodeResponse(
                             self.state.node_id,
-                            self.state.address.ip(),
-                            self.state.address.port(),
+                            self.state.my_address.ip(),
+                            self.state.my_address.port(),
                         ))
                         .await?;
                     } else {

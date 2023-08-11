@@ -298,7 +298,9 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
                                     let stream = stream.clone();
                                     tokio::spawn(async move {
                                         dht.get(&g, &stream).await;
-                                    });
+                                    })
+                                    .await // todo: why is this await needed?
+                                    .unwrap();
                                     header_bytes.clear();
                                     packet = ApiPacket::default();
                                 }
@@ -326,7 +328,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     start_dht(create_dht_from_command_line_arguments().await).await
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_main() {
     let dht_0 = P2pDht::new(
         Duration::from_secs(60),
@@ -364,7 +366,7 @@ struct Failure {
     payload: DhtFailure,
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_api_get() {
     let dht_0 = P2pDht::new(
         Duration::from_secs(60),
@@ -379,17 +381,11 @@ async fn test_api_get() {
         start_dht(dht_0).await.unwrap();
     });
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let mut stream = TcpStream::connect("127.0.0.1:3000".parse::<SocketAddr>().unwrap())
-        .await
-        .unwrap();
+    let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
 
     println!("Connected to API");
 
-    let key = [
-        0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
-        0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
-    ];
+    let key = [0x1; 32];
     let header = ApiPacketHeader {
         size: 4 + key.len() as u16,
         message_type: API_DHT_GET,
@@ -398,16 +394,14 @@ async fn test_api_get() {
     let mut buf = with_big_endian().serialize(&header).unwrap();
     buf.extend(key);
 
-    println!("Send Get Request");
-    let _ = stream.write_all(&buf).await;
-
-    println!("Receiving");
-
+    println!("Sending get request");
+    stream.write_all(&buf).await.unwrap();
+    println!("Awaiting answer to get request");
     let bytes_read = stream.read(&mut buf).await.unwrap();
-    println!("Read");
+
     let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
 
-    println!("received_data {:?}", received_data);
+    println!("Data received: {:?}", received_data);
 
     let buf = with_big_endian()
         .serialize(&ApiPacketHeader {
@@ -416,9 +410,47 @@ async fn test_api_get() {
         })
         .unwrap();
 
-    let _ = stream.write_all(&buf).await;
+    stream.write_all(&buf).await.unwrap();
 
     handle_0.abort();
 
     assert!(handle_0.await.unwrap_err().is_cancelled())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_minimal() {
+    tokio::spawn(async move {
+        listen().await.unwrap();
+    });
+
+    let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
+
+    stream.write_all(&[0x1; 4]).await.unwrap();
+    let mut buf = [0; 1024];
+    let bytes_read = stream.read(&mut buf).await.unwrap();
+    assert_eq!(bytes_read, 4);
+}
+
+async fn listen() -> Result<(), Box<dyn Error>> {
+    let listener = TcpListener::bind("0.0.0.0:3000").await?;
+    loop {
+        let (mut stream, _socket_address) = listener.accept().await?;
+        tokio::spawn(async move {
+            let connection_result = async move || -> Result<(), Box<dyn Error>> {
+                let mut buf = [0; 1024];
+                let n = match stream.read(&mut buf).await {
+                    // socket closed
+                    Ok(n) if n == 0 => return Ok(()),
+                    Ok(n) => n,
+                    Err(e) => return Err(e.into()),
+                };
+                println!("Received {} bytes", n);
+                tokio::spawn(async move {
+                    stream.write_all(&buf[0..n]).await.unwrap();
+                });
+                Ok(())
+            };
+            connection_result().await.unwrap();
+        });
+    }
 }
