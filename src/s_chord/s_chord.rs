@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::s_chord::peer_messages::{ChordPeer, PeerMessage};
@@ -29,14 +30,23 @@ struct SChordState {
 }
 
 impl SChord {
-    pub fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
+    pub fn get_address(&self) -> SocketAddr {
+        self.state.my_address
+    }
+
+    pub async fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
         let self_clone = SChord {
             state: self.state.clone(),
         };
-        tokio::spawn(async move {
-            let listener = TcpListener::bind(server_address)
-                .await
-                .expect("Failed to bind SChord server socket");
+        let listener = TcpListener::bind(server_address)
+            .await
+            .expect("Failed to bind SChord server socket");
+        // Open channel for inter thread communication
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let handle = tokio::spawn(async move {
+            // Send signal that we are running
+            tx.send(true).await.expect("Unable to send message");
             println!("SChord listening for peers on {}", server_address);
             loop {
                 let (stream, connecting_address) = listener.accept().await.unwrap();
@@ -50,7 +60,11 @@ impl SChord {
                         .await;
                 });
             }
-        })
+        });
+        // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
+        rx.recv().await.unwrap();
+
+        handle
     }
 
     pub async fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {

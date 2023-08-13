@@ -147,7 +147,7 @@ impl P2pDht {
         initial_peer: Option<SocketAddr>,
     ) -> Self {
         let chord = SChord::new(initial_peer, public_server_address).await;
-        let thread = chord.start_server_socket(public_server_address);
+        let thread = chord.start_server_socket(public_server_address).await;
         P2pDht {
             default_store_duration,
             max_store_duration,
@@ -202,7 +202,7 @@ impl P2pDht {
     }
 }
 
-async fn create_dht_from_command_line_arguments() -> P2pDht {
+async fn create_dht_from_command_line_arguments() -> Arc<P2pDht> {
     let args = env::args().collect::<Vec<String>>();
     assert!(args.len() >= 2);
     assert_eq!(args[1], "-c");
@@ -240,25 +240,26 @@ async fn create_dht_from_command_line_arguments() -> P2pDht {
     // todo
     let initial_peer = None;
 
-    P2pDht::new(
-        default_store_duration,
-        max_store_duration,
-        p2p_address,
-        api_address,
-        initial_peer,
+    Arc::new(
+        P2pDht::new(
+            default_store_duration,
+            max_store_duration,
+            p2p_address,
+            api_address,
+            initial_peer,
+        )
+        .await,
     )
-    .await
 }
 
-async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
-    let api_listener = TcpListener::bind(dht.api_address).await?;
+async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Box<dyn Error>> {
     println!("Listening for API Calls on {}", dht.api_address);
-    let dht = Arc::new(dht);
     loop {
         let (stream, _socket_address) = api_listener.accept().await?;
         let dht = Arc::clone(&dht);
         let (mut reader, writer) = stream.into_split();
         let writer = Arc::new(Mutex::new(writer));
+
         tokio::spawn(async move {
             let connection_result = async move || -> Result<(), Box<dyn Error>> {
                 let mut buf = [0; 1024];
@@ -327,60 +328,85 @@ async fn start_dht(dht: P2pDht) -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // todo: RPS communication for bootstrap peers or get from config file
-    start_dht(create_dht_from_command_line_arguments().await).await
+
+    let dht = create_dht_from_command_line_arguments().await;
+    let api_listener = TcpListener::bind(dht.api_address).await.unwrap();
+    start_dht(dht, api_listener).await
 }
 
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
+    use std::sync::Arc;
     use std::time::Duration;
-
-    use bincode::Options;
-    use serde::Deserialize;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-    use tokio::time::sleep;
 
     use crate::api_communication::with_big_endian;
     use crate::{start_dht, ApiPacketHeader, DhtFailure, P2pDht, API_DHT_GET, API_DHT_SHUTDOWN};
+    use bincode::Options;
+    use serde::Deserialize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
+
+    async fn start_peers(amount: u16) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
+        let mut handles: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
+
+        for i in 0..amount {
+            let dht = Arc::new(
+                P2pDht::new(
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    format!("127.0.0.1:4000{}", i)
+                        .parse::<SocketAddr>()
+                        .unwrap(),
+                    format!("127.0.0.1:3000{}", i)
+                        .parse::<SocketAddr>()
+                        .unwrap(),
+                    if i == 0 {
+                        None
+                    } else {
+                        Some(handles[0].0.dht.get_address())
+                    },
+                )
+                .await,
+            );
+
+            let api_listener = TcpListener::bind(dht.api_address).await.unwrap();
+            // Open channel for inter thread communication
+            let (tx, mut rx) = mpsc::channel(1);
+
+            handles.push((
+                dht.clone(),
+                tokio::spawn(async move {
+                    // Send signal that we are running
+                    tx.send(true).await.expect("Unable to send message");
+                    start_dht(dht, api_listener).await.unwrap();
+                }),
+            ));
+            // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
+            rx.recv().await.unwrap();
+        }
+
+        handles
+    }
+
+    async fn stop_dhts(mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
+        for (dht, handle) in dhts.iter() {
+            handle.abort();
+        }
+
+        // Iterate over all entrys and take ownership over the handles to terminate them
+        while let Some((_dht, handle)) = dhts.drain(..).next() {
+            // Wait for handles to join and ignore all errors
+            let _ = handle.await;
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_main() {
-        let dht_0 = P2pDht::new(
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
-            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-            None,
-        )
-        .await;
-
-        let handle_0 = tokio::spawn(async move {
-            start_dht(dht_0).await.unwrap();
-        });
-
-        // Wait for socket to open
-        sleep(Duration::from_millis(100)).await;
-
-        let dht_1 = P2pDht::new(
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            "127.0.0.1:40001".parse::<SocketAddr>().unwrap(),
-            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-            Some("127.0.0.1:40000".parse::<SocketAddr>().unwrap()),
-        )
-        .await;
-
-        let handle_1 = tokio::spawn(async move {
-            start_dht(dht_1).await.unwrap();
-        });
-
-        handle_0.abort();
-        handle_1.abort();
-
-        // Wait for handles to join and ignore all errors
-        let _ = handle_0.await;
-        let _ = handle_1.await;
+    async fn test_start_two_peers() {
+        let dhts = start_peers(2).await;
+        stop_dhts(dhts);
     }
 
     #[derive(Deserialize, Debug)]
@@ -391,26 +417,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get() {
-        let dht_0 = P2pDht::new(
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            "127.0.0.1:40000".parse::<SocketAddr>().unwrap(),
-            "127.0.0.1:3000".parse::<SocketAddr>().unwrap(),
-            None,
-        )
-        .await;
+        let dhts = start_peers(1).await;
 
-        let handle_0 = tokio::spawn(async move {
-            start_dht(dht_0).await.unwrap();
-        });
+        let (dht, handle) = &dhts[0];
+        let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
-        // Wait for socket to open
-        sleep(Duration::from_secs(1)).await;
-
-        let mut stream = TcpStream::connect("127.0.0.1:3000").await.unwrap();
-
-        println!("Connected to API");
-
+        // Send Get Key Request
         let key = [0x1; 32];
         let header = ApiPacketHeader {
             size: 4 + key.len() as u16,
@@ -419,27 +431,23 @@ mod tests {
 
         let mut buf = with_big_endian().serialize(&header).unwrap();
         buf.extend(key);
-
-        println!("Sending get request");
         stream.write_all(&buf).await.unwrap();
-        println!("Awaiting answer to get request");
-        let bytes_read = stream.read(&mut buf).await.unwrap();
 
+        // Read response
+        let bytes_read = stream.read(&mut buf).await.unwrap();
         let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
 
-        println!("Data received: {:?}", received_data);
+        assert_eq!(received_data.payload.key, key);
 
+        // Send shutdown request
         let buf = with_big_endian()
             .serialize(&ApiPacketHeader {
                 size: 4,
                 message_type: API_DHT_SHUTDOWN,
             })
             .unwrap();
-
         stream.write_all(&buf).await.unwrap();
 
-        handle_0.abort();
-
-        assert!(handle_0.await.unwrap_err().is_cancelled())
+        stop_dhts(dhts).await;
     }
 }
