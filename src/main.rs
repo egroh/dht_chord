@@ -38,13 +38,13 @@ struct ApiPacketHeader {
 enum ApiPacketMessage {
     Put(DhtPut),
     Get(DhtGet),
-    Failure(DhtFailure),
-    Success(DhtSuccess),
+    Failure(DhtGetFailure),
+    Success(DhtGetResponse),
     Shutdown,
     Unparsed(Vec<u8>),
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct DhtPut {
     ttl: u16,
     _replication: u8,
@@ -59,13 +59,13 @@ struct DhtGet {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct DhtSuccess {
+struct DhtGetResponse {
     key: [u8; 32],
     value: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct DhtFailure {
+struct DhtGetFailure {
     key: [u8; 32],
 }
 
@@ -91,13 +91,17 @@ impl ApiPacket {
                 match self.header.message_type {
                     API_DHT_PUT => {
                         if self.header.size < 4 + 4 + 32 + 1 {
-                            return Err("Invalid size".into());
+                            return Err(
+                                format!["DHT PUT invalid size: {}", self.header.size].into()
+                            );
                         }
                         self.message = ApiPacketMessage::Put(with_big_endian().deserialize(v)?);
                     }
                     API_DHT_GET => {
                         if self.header.size != 4 + 32 {
-                            return Err("Invalid size".into());
+                            return Err(
+                                format!["DHT GET invalid size: {}", self.header.size].into()
+                            );
                         }
                         self.message = ApiPacketMessage::Get(with_big_endian().deserialize(v)?);
                     }
@@ -341,9 +345,12 @@ mod tests {
     use std::time::Duration;
 
     use crate::api_communication::with_big_endian;
-    use crate::{start_dht, ApiPacketHeader, DhtFailure, P2pDht, API_DHT_GET, API_DHT_SHUTDOWN};
+    use crate::{
+        start_dht, ApiPacketHeader, DhtGetFailure, DhtGetResponse, DhtPut, P2pDht, API_DHT_GET,
+        API_DHT_PUT, API_DHT_SHUTDOWN,
+    };
     use bincode::Options;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
@@ -406,24 +413,35 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_start_two_peers() {
         let dhts = start_peers(2).await;
-        stop_dhts(dhts);
+        stop_dhts(dhts).await;
+    }
+
+    #[derive(Serialize, Debug)]
+    struct Put {
+        header: ApiPacketHeader,
+        payload: DhtPut,
+    }
+    #[derive(Deserialize, Debug)]
+    struct GetFailure {
+        header: ApiPacketHeader,
+        payload: DhtGetFailure,
     }
 
     #[derive(Deserialize, Debug)]
-    struct Failure {
+    struct GetResponse {
         header: ApiPacketHeader,
-        payload: DhtFailure,
+        payload: DhtGetResponse,
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_api_get() {
+    async fn test_api_get_failure() {
         let dhts = start_peers(1).await;
 
         let (dht, handle) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
-        // Send Get Key Request
         let key = [0x1; 32];
+        // Send Get Key Request
         let header = ApiPacketHeader {
             size: 4 + key.len() as u16,
             message_type: API_DHT_GET,
@@ -435,7 +453,7 @@ mod tests {
 
         // Read response
         let bytes_read = stream.read(&mut buf).await.unwrap();
-        let received_data: Failure = bincode::deserialize(&buf[..bytes_read]).unwrap();
+        let received_data: GetFailure = bincode::deserialize(&buf[..bytes_read]).unwrap();
 
         assert_eq!(received_data.payload.key, key);
 
@@ -448,6 +466,88 @@ mod tests {
             .unwrap();
         stream.write_all(&buf).await.unwrap();
 
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_api_store_get() {
+        let dhts = start_peers(2).await;
+
+        let (dht, handle) = &dhts[0];
+        let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
+
+        let key = [0x1; 32];
+        let value = vec![0x1, 0x2, 0x3];
+
+        // Send Put Key Request
+        let put_message = Put {
+            header: ApiPacketHeader {
+                size: 4 + 4 + key.len() as u16 + value.len() as u16,
+                message_type: API_DHT_PUT,
+            },
+            payload: DhtPut {
+                ttl: 0,
+                _replication: 0,
+                _reserved: 0,
+                key,
+                value: value,
+            },
+        };
+        stream
+            .write_all(&with_big_endian().serialize(&put_message).unwrap())
+            .await
+            .unwrap();
+
+        // Send Get Key Request
+        let header = ApiPacketHeader {
+            size: 4 + key.len() as u16,
+            message_type: API_DHT_GET,
+        };
+        let mut buf = with_big_endian().serialize(&header).unwrap();
+        buf.extend(key);
+        stream.write_all(&buf).await.unwrap();
+
+        // Read response
+        let bytes_read = stream.read(&mut buf).await.unwrap();
+        let received_data: GetResponse = bincode::deserialize(&buf[..bytes_read]).unwrap();
+
+        assert_eq!(received_data.payload.key, key);
+
+        // Send shutdown request
+        let buf = with_big_endian()
+            .serialize(&ApiPacketHeader {
+                size: 4,
+                message_type: API_DHT_SHUTDOWN,
+            })
+            .unwrap();
+        stream.write_all(&buf).await.unwrap();
+
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_store_get() {
+        let dhts = start_peers(2).await;
+
+        let key = [0x1; 32];
+        let value = vec![0x1, 0x2, 0x3];
+
+        // Put Value
+        let (dht, handle) = &dhts[0];
+        dht.put(DhtPut {
+            ttl: 0,
+            _replication: 0,
+            _reserved: 0,
+            key,
+            value: value.clone(),
+        })
+        .await;
+
+        // Get
+        let hashed_key = P2pDht::hash_vec_bytes(&key);
+        let value_back = dht.dht.get(hashed_key).await.unwrap();
+
+        assert_eq!(value_back, value);
         stop_dhts(dhts).await;
     }
 }
