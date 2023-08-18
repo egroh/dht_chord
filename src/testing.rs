@@ -1,1 +1,211 @@
-async fn main() -> Result<(), Box<dyn Error>> {}
+mod tests {
+
+    use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::api_communication::with_big_endian;
+    use crate::{
+        start_dht, ApiPacketHeader, DhtGetFailure, DhtGetResponse, DhtPut, P2pDht, API_DHT_GET,
+        API_DHT_PUT, API_DHT_SHUTDOWN,
+    };
+    use bincode::Options;
+    use serde::{Deserialize, Serialize};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::mpsc;
+    use tokio::task::JoinHandle;
+
+    async fn start_peers(amount: u16) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
+        let mut handles: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
+
+        static COUNTER: AtomicU32 = AtomicU32::new(1);
+
+        for j in 0..amount {
+            let i = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dht = Arc::new(
+                P2pDht::new(
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    format!("127.0.0.1:4{:0>4}", i)
+                        .parse::<SocketAddr>()
+                        .unwrap(),
+                    format!("127.0.0.1:3{:0>4}", i)
+                        .parse::<SocketAddr>()
+                        .unwrap(),
+                    if j == 0 {
+                        None
+                    } else {
+                        Some(handles[0].0.dht.get_address())
+                    },
+                )
+                .await,
+            );
+
+            let api_listener = TcpListener::bind(dht.api_address).await.unwrap();
+            // Open channel for inter thread communication
+            let (tx, mut rx) = mpsc::channel(1);
+
+            handles.push((
+                dht.clone(),
+                tokio::spawn(async move {
+                    // Send signal that we are running
+                    tx.send(true).await.expect("Unable to send message");
+                    start_dht(dht, api_listener).await.unwrap();
+                }),
+            ));
+            // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
+            rx.recv().await.unwrap();
+        }
+
+        handles
+    }
+
+    async fn stop_dhts(mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
+        for (dht, handle) in dhts.iter() {
+            handle.abort();
+        }
+
+        // Iterate over all entrys and take ownership over the handles to terminate them
+        while let Some((_dht, handle)) = dhts.drain(..).next() {
+            // Wait for handles to join and ignore all errors
+            let _ = handle.await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_start_two_peers() {
+        let dhts = start_peers(2).await;
+        stop_dhts(dhts).await;
+    }
+
+    #[derive(Serialize, Debug)]
+    struct Put {
+        header: ApiPacketHeader,
+        payload: DhtPut,
+    }
+    #[derive(Deserialize, Debug)]
+    struct GetFailure {
+        header: ApiPacketHeader,
+        payload: DhtGetFailure,
+    }
+
+    #[derive(Deserialize, Debug)]
+    struct GetResponse {
+        header: ApiPacketHeader,
+        payload: DhtGetResponse,
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_api_get_failure() {
+        let dhts = start_peers(1).await;
+
+        let (dht, handle) = &dhts[0];
+        let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
+
+        let key = [0x1; 32];
+        // Send Get Key Request
+        let header = ApiPacketHeader {
+            size: 4 + key.len() as u16,
+            message_type: API_DHT_GET,
+        };
+
+        let mut buf = with_big_endian().serialize(&header).unwrap();
+        buf.extend(key);
+        stream.write_all(&buf).await.unwrap();
+
+        // Read response
+        let bytes_read = stream.read(&mut buf).await.unwrap();
+        let received_data: GetFailure = bincode::deserialize(&buf[..bytes_read]).unwrap();
+
+        assert_eq!(received_data.payload.key, key);
+
+        // Send shutdown request
+        let buf = with_big_endian()
+            .serialize(&ApiPacketHeader {
+                size: 4,
+                message_type: API_DHT_SHUTDOWN,
+            })
+            .unwrap();
+        stream.write_all(&buf).await.unwrap();
+
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_api_store_get() {
+        let dhts = start_peers(2).await;
+
+        let (dht, handle) = &dhts[0];
+        let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
+
+        let key = [0x1; 32];
+        let value = vec![0x1, 0x2, 0x3];
+
+        // Send Put Key Request
+        let put_message = Put {
+            header: ApiPacketHeader {
+                size: 4 + 4 + key.len() as u16 + value.len() as u16,
+                message_type: API_DHT_PUT,
+            },
+            payload: DhtPut {
+                ttl: 0,
+                _replication: 0,
+                _reserved: 0,
+                key,
+                value: value,
+            },
+        };
+        stream
+            .write_all(&with_big_endian().serialize(&put_message).unwrap())
+            .await
+            .unwrap();
+
+        println!("Send store");
+
+        // Send Get Key Request
+        let header = ApiPacketHeader {
+            size: 4 + key.len() as u16,
+            message_type: API_DHT_GET,
+        };
+        let mut buf = with_big_endian().serialize(&header).unwrap();
+        buf.extend(key);
+        stream.write_all(&buf).await.unwrap();
+
+        println!("Send get");
+
+        // Read response
+        let bytes_read = stream.read(&mut buf).await.unwrap();
+        let received_data: GetResponse = bincode::deserialize(&buf[..bytes_read]).unwrap();
+
+        assert_eq!(received_data.payload.key, key);
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_store_get() {
+        let dhts = start_peers(2).await;
+
+        let key = [0x1; 32];
+        let value = vec![0x1, 0x2, 0x3];
+
+        // Put Value
+        let (dht, handle) = &dhts[0];
+        dht.put(DhtPut {
+            ttl: 0,
+            _replication: 0,
+            _reserved: 0,
+            key,
+            value: value.clone(),
+        })
+        .await;
+
+        // Get
+        let hashed_key = P2pDht::hash_vec_bytes(&key);
+        let value_back = dht.dht.get(hashed_key).await.unwrap();
+
+        assert_eq!(value_back, value);
+        stop_dhts(dhts).await;
+    }
+}

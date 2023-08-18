@@ -150,7 +150,8 @@ impl SChord {
             .await;
     }
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) {
-        todo!("Insert into self or correct node");
+        // lookup in other node if necessary
+        self.state.local_storage.insert(key, value);
     }
 
     pub async fn get(&self, key: u64) -> Option<Vec<u8>> {
