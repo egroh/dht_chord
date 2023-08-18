@@ -208,4 +208,67 @@ mod tests {
         assert_eq!(value_back, value);
         stop_dhts(dhts).await;
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_multiple_store_get() {
+        let dhts = start_peers(2).await;
+        let (dht0, handle) = &dhts[0];
+        let (dht1, handle) = &dhts[1];
+
+        let pairs0 = [
+            ([0x1; 32], vec![0x1, 0x2, 0x3]),
+            ([0x2; 32], vec![0x2]),
+            ([0x3; 32], vec![0x3]),
+            ([0x4; 32], vec![0x4]),
+        ];
+        let pairs1 = [
+            ([0xa; 32], vec![0xa]),
+            ([0xb; 32], vec![0xb]),
+            ([0xc; 32], vec![0xc]),
+            ([0xd; 32], vec![0xd]),
+        ];
+
+        for (key, value) in &pairs0 {
+            // Put Value
+            dht0.put(DhtPut {
+                ttl: 0,
+                _replication: 0,
+                _reserved: 0,
+                key: *key,
+                value: value.clone(),
+            })
+            .await;
+        }
+
+        for (key, value) in &pairs1 {
+            // Put Value
+            dht1.put(DhtPut {
+                ttl: 0,
+                _replication: 0,
+                _reserved: 0,
+                key: *key,
+                value: value.clone(),
+            })
+            .await;
+        }
+
+        let mut pairs_all = [pairs0, pairs1].concat();
+
+        for (key, value) in pairs_all {
+            // Get
+            let hashed_key = P2pDht::hash_vec_bytes(&key);
+
+            for dht in [dht0, dht1] {
+                match dht.dht.get(hashed_key).await {
+                    None => {
+                        panic!("Value has not been found")
+                    }
+                    Some(value_back) => {
+                        assert_eq!(value_back, value);
+                    }
+                }
+            }
+        }
+        stop_dhts(dhts).await;
+    }
 }
