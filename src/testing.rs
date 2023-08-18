@@ -252,7 +252,9 @@ mod tests {
             .await;
         }
 
-        let mut pairs_all = [pairs0, pairs1].concat();
+        print_dhts(&dhts);
+
+        let pairs_all = [pairs0, pairs1].concat();
 
         for (key, value) in pairs_all {
             // Get
@@ -270,5 +272,14 @@ mod tests {
             }
         }
         stop_dhts(dhts).await;
+    }
+
+    fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
+        for (dht, _) in dhts {
+            println!("{}", dht.api_address);
+            for (key, value) in dht.dht.state.local_storage.clone() {
+                println!("  {}: {:?}", key, value);
+            }
+        }
     }
 }

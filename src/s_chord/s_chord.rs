@@ -13,10 +13,10 @@ use tokio::task::JoinHandle;
 use crate::s_chord::peer_messages::{ChordPeer, PeerMessage};
 
 pub struct SChord {
-    state: Arc<SChordState>,
+    pub state: Arc<SChordState>,
 }
 
-struct SChordState {
+pub struct SChordState {
     default_store_duration: Duration,
     max_store_duration: Duration,
 
@@ -26,7 +26,7 @@ struct SChordState {
     successors: Vec<RwLock<ChordPeer>>,
     predecessors: Vec<RwLock<ChordPeer>>,
 
-    local_storage: DashMap<u64, Vec<u8>>,
+    pub local_storage: DashMap<u64, Vec<u8>>,
 }
 
 impl SChord {
@@ -150,16 +150,27 @@ impl SChord {
             .await;
     }
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) {
-        // lookup in other node if necessary
-        self.state.local_storage.insert(key, value);
+        if self.is_responsible_for_key(key) {
+            self.state.local_storage.insert(key, value);
+        } else {
+            todo!("Value has to be inserted into other node");
+        }
     }
 
     pub async fn get(&self, key: u64) -> Option<Vec<u8>> {
-        // todo insert in other node if necessary
-        self.state
-            .local_storage
-            .get(&key)
-            .map(|entry| entry.value().clone())
+        if self.is_responsible_for_key(key) {
+            self.state
+                .local_storage
+                .get(&key)
+                .map(|entry| entry.value().clone())
+        } else {
+            todo!("Value has to be looked up on another node");
+        }
+    }
+
+    fn is_responsible_for_key(&self, key: u64) -> bool {
+        self.state.predecessors.is_empty()
+            || (key <= self.state.node_id && key > self.state.predecessors[0].read().id)
     }
 
     /// Handle incoming requests from peers
@@ -176,9 +187,7 @@ impl SChord {
                 PeerMessage::GetNode(id) => {
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
-                    if self.state.predecessors.is_empty()
-                        || (id <= self.state.node_id && id > self.state.predecessors[0].read().id)
-                    {
+                    if self.is_responsible_for_key(id) {
                         tx.send(PeerMessage::GetNodeResponse(ChordPeer {
                             id: self.state.node_id,
                             address: self.state.my_address,
