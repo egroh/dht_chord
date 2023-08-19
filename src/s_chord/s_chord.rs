@@ -91,6 +91,8 @@ impl SChord {
 
         Ok(())
     }
+    // todo disable linter for now
+    #[allow(dead_code)]
     async fn init_finger_table(
         &self,
         tx: &mut Sender<PeerMessage, WriteHalf<'_>, Bincode>,
@@ -145,7 +147,7 @@ impl SChord {
                         match rx.recv().await? {
                             PeerMessage::GetPredecessorResponse(predecessor) => {
                                 // Add predecessor to list
-                                predecessors.push(RwLock::new(predecessor));
+                                predecessors.push(predecessor);
 
                                 // Initialize finger table
                                 // todo: use predecessor for this
@@ -180,7 +182,7 @@ impl SChord {
                                 finger_table: RwLock::new(finger_table),
                                 _successors: RwLock::new(Vec::new()),
                                 node_id,
-                                predecessors: RwLock::new(Vec::new()),
+                                predecessors: RwLock::new(predecessors),
                                 address: server_address,
                             }),
                         })
@@ -235,6 +237,16 @@ impl SChord {
 
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
         if self.is_responsible_for_key(key) {
+            if self
+                .state
+                .local_storage
+                .get(&key)
+                .map(|entry| entry.value().clone())
+                .is_none()
+            {
+                eprintln!("Not found locally {}", self.state.address);
+            }
+
             self.state
                 .local_storage
                 .get(&key)
@@ -381,9 +393,9 @@ impl SChord {
     }
 
     pub fn print(&self) {
-        println!("Id {:X}: {}", self.state.node_id, self.state.address);
+        println!("Id {:x}: {}", self.state.node_id, self.state.address);
         for predecessor in self.state.predecessors.read().iter() {
-            println!(" P {:X}: {}", predecessor.id, predecessor.address);
+            println!(" P {:x}: {}", predecessor.id, predecessor.address);
         }
         let mut i = 0;
         for entry in self.state.finger_table.read().iter() {
@@ -391,7 +403,7 @@ impl SChord {
             if i > 10 {
                 break;
             }
-            println!(" F {:X}: {}", entry.id, entry.address);
+            println!(" F {:x}: {}", entry.id, entry.address);
         }
     }
 }

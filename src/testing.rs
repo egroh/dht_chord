@@ -283,7 +283,7 @@ mod tests {
         for (dht, _) in dhts {
             println!("{}", dht.api_address);
             for (key, value) in dht.dht.state.local_storage.clone() {
-                println!("  {:X}: {:?}", key, value);
+                println!("  {:x}: {:?}", key, value);
             }
         }
     }
