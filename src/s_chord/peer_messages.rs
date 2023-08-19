@@ -15,7 +15,7 @@ pub(crate) enum PeerMessage {
     GetValue(u64),
     GetValueResponse(Option<Vec<u8>>),
     InsertValue(u64, Vec<u8>),
-    SplitNode(u64),
+    SplitNode(ChordPeer),
     GetPredecessor,
     GetPredecessorResponse(ChordPeer),
 }

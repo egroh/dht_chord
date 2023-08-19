@@ -134,12 +134,12 @@ impl ApiPacket {
 }
 
 struct P2pDht {
-    default_store_duration: Duration,
-    max_store_duration: Duration,
-    public_server_address: SocketAddr,
+    _default_store_duration: Duration,
+    _max_store_duration: Duration,
+    _public_server_address: SocketAddr,
     api_address: SocketAddr,
     dht: SChord,
-    server_thread: JoinHandle<()>,
+    _server_thread: JoinHandle<()>,
 }
 
 impl P2pDht {
@@ -152,13 +152,20 @@ impl P2pDht {
     ) -> Self {
         let chord = SChord::new(initial_peer, public_server_address).await;
         let thread = chord.start_server_socket(public_server_address).await;
+        if initial_peer.is_some() {
+            // Inform successor to split the node, as we now control part of his key space
+            chord
+                .split_node()
+                .await
+                .expect("Node Split encountered an error");
+        }
         P2pDht {
-            default_store_duration,
-            max_store_duration,
-            public_server_address,
+            _default_store_duration: default_store_duration,
+            _max_store_duration: max_store_duration,
+            _public_server_address: public_server_address,
             api_address,
             dht: chord,
-            server_thread: thread,
+            _server_thread: thread,
         }
     }
 
@@ -170,14 +177,16 @@ impl P2pDht {
 
     async fn put(&self, put: DhtPut) {
         let hashed_key = P2pDht::hash_vec_bytes(&put.key);
-        self.dht
+        // todo maybe not ignore error
+        let _ = self
+            .dht
             .insert_with_ttl(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
             .await;
     }
     async fn get(&self, get: &DhtGet, response_stream: &Arc<Mutex<OwnedWriteHalf>>) {
         let hashed_key = P2pDht::hash_vec_bytes(&get.key);
         match self.dht.get(hashed_key).await {
-            Some(value) => {
+            Ok(value) => {
                 let header = ApiPacketHeader {
                     size: 4 + get.key.len() as u16 + value.len() as u16,
                     message_type: API_DHT_SUCCESS,
@@ -190,7 +199,10 @@ impl P2pDht {
                     eprintln!("Error writing to socket: {}", e);
                 }
             }
-            None => {
+            Err(e) => {
+                // todo maybe remove this
+                eprintln!("{}", e);
+
                 let header = ApiPacketHeader {
                     size: 4 + get.key.len() as u16,
                     message_type: API_DHT_FAILURE,

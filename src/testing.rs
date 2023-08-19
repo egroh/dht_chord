@@ -63,7 +63,7 @@ mod tests {
     }
 
     async fn stop_dhts(mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
-        for (dht, handle) in dhts.iter() {
+        for (_, handle) in dhts.iter() {
             handle.abort();
         }
 
@@ -87,13 +87,13 @@ mod tests {
     }
     #[derive(Deserialize, Debug)]
     struct GetFailure {
-        header: ApiPacketHeader,
+        _header: ApiPacketHeader,
         payload: DhtGetFailure,
     }
 
     #[derive(Deserialize, Debug)]
     struct GetResponse {
-        header: ApiPacketHeader,
+        _header: ApiPacketHeader,
         payload: DhtGetResponse,
     }
 
@@ -101,7 +101,7 @@ mod tests {
     async fn test_api_get_failure() {
         let dhts = start_peers(1).await;
 
-        let (dht, handle) = &dhts[0];
+        let (dht, _) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
         let key = [0x1; 32];
@@ -137,7 +137,7 @@ mod tests {
     async fn test_api_store_get() {
         let dhts = start_peers(2).await;
 
-        let (dht, handle) = &dhts[0];
+        let (dht, _) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
         let key = [0x1; 32];
@@ -191,7 +191,7 @@ mod tests {
         let value = vec![0x1, 0x2, 0x3];
 
         // Put Value
-        let (dht, handle) = &dhts[0];
+        let (dht, _) = &dhts[0];
         dht.put(DhtPut {
             ttl: 0,
             _replication: 0,
@@ -212,11 +212,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_multiple_store_get() {
         let dhts = start_peers(2).await;
-        let (dht0, handle) = &dhts[0];
-        let (dht1, handle) = &dhts[1];
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let (dht0, _) = &dhts[0];
+        let (dht1, _) = &dhts[1];
 
         let pairs0 = [
-            ([0x1; 32], vec![0x1, 0x2, 0x3]),
+            ([0x1; 32], vec![0x1]),
             ([0x2; 32], vec![0x2]),
             ([0x3; 32], vec![0x3]),
             ([0x4; 32], vec![0x4]),
@@ -252,6 +255,7 @@ mod tests {
             .await;
         }
 
+        tokio::time::sleep(Duration::from_millis(20)).await;
         print_dhts(&dhts);
 
         let pairs_all = [pairs0, pairs1].concat();
@@ -262,10 +266,11 @@ mod tests {
 
             for dht in [dht0, dht1] {
                 match dht.dht.get(hashed_key).await {
-                    None => {
+                    Err(e) => {
+                        eprintln!("{:?}", e);
                         panic!("Value has not been found")
                     }
-                    Some(value_back) => {
+                    Ok(value_back) => {
                         assert_eq!(value_back, value);
                     }
                 }
@@ -278,7 +283,7 @@ mod tests {
         for (dht, _) in dhts {
             println!("{}", dht.api_address);
             for (key, value) in dht.dht.state.local_storage.clone() {
-                println!("  {}: {:?}", key, value);
+                println!("  {:X}: {:?}", key, value);
             }
         }
     }
