@@ -17,7 +17,7 @@ mod tests {
         API_DHT_PUT, API_DHT_SHUTDOWN,
     };
 
-    async fn start_peers(amount: u16) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
+    async fn start_peers(amount: usize) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
         let mut handles: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
 
         static COUNTER: AtomicU32 = AtomicU32::new(1);
@@ -265,6 +265,57 @@ mod tests {
             let hashed_key = P2pDht::hash_vec_bytes(&key);
 
             for dht in [dht0, dht1] {
+                match dht.dht.get(hashed_key).await {
+                    Err(e) => {
+                        eprintln!("{:?}", e);
+                        panic!("Value has not been found")
+                    }
+                    Ok(value_back) => {
+                        assert_eq!(value_back, value);
+                    }
+                }
+            }
+        }
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_hammer_store_get() {
+        let amount_peers: usize = 4;
+        let dhts = start_peers(amount_peers).await;
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let pairs_size: usize = 16;
+        let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+        for i in 0..pairs_size {
+            pairs.push(([i as u8; 32], vec![i as u8]));
+        }
+
+        let mut i = 0;
+        for (i, pair_chunk) in pairs.chunks(pairs_size / (amount_peers - 2)).enumerate() {
+            for (key, value) in pair_chunk {
+                // Put Value
+                dhts[i]
+                    .0
+                    .put(DhtPut {
+                        ttl: 0,
+                        _replication: 0,
+                        _reserved: 0,
+                        key: *key,
+                        value: value.clone(),
+                    })
+                    .await;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        print_dhts(&dhts);
+        for (key, value) in pairs {
+            // Get
+            let hashed_key = P2pDht::hash_vec_bytes(&key);
+
+            for (dht, _) in &dhts {
                 match dht.dht.get(hashed_key).await {
                     Err(e) => {
                         eprintln!("{:?}", e);
