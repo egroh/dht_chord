@@ -292,7 +292,6 @@ mod tests {
             pairs.push(([i as u8; 32], vec![i as u8]));
         }
 
-        let mut i = 0;
         for (i, pair_chunk) in pairs.chunks(pairs_size / (amount_peers - 2)).enumerate() {
             for (key, value) in pair_chunk {
                 // Put Value
@@ -333,6 +332,7 @@ mod tests {
     fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
         for (dht, _) in dhts {
             println!("{}", dht.api_address);
+            dht.dht.print_short();
             for (key, value) in dht.dht.state.local_storage.clone() {
                 println!("  {:x}: {:?}", key, value);
             }

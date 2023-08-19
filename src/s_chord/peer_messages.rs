@@ -18,4 +18,5 @@ pub(crate) enum PeerMessage {
     SplitNode(ChordPeer),
     GetPredecessor,
     GetPredecessorResponse(ChordPeer),
+    SetSuccessor(ChordPeer),
 }

@@ -321,6 +321,27 @@ impl SChord {
         }
     }
 
+    pub async fn inform_predessecor_existance(&self) -> Result<()> {
+        // todo fix race condition
+        let successor = self.state.predecessors.read()[0];
+
+        // Connect to successor
+        let mut stream = TcpStream::connect(successor.address).await?;
+        let (reader, writer) = stream.split();
+        let (mut tx, _) = channels::channel(reader, writer);
+
+        // Ask successor about predecessor
+        tx.send(PeerMessage::SetSuccessor(ChordPeer {
+            id: self.state.node_id,
+            address: self.state.address,
+        }))
+        .await?;
+
+        // todo maybe response?
+
+        Ok(())
+    }
+
     /// Handle incoming requests from peers
     async fn accept_peer_connection(&self, mut stream: TcpStream) -> Result<()> {
         let (reader, writer) = stream.split();
@@ -360,6 +381,11 @@ impl SChord {
                                 .await?;
                         }
                         PeerMessage::SplitNode(predecessor) => {
+                            println!(
+                                "{}: Split pred: {}",
+                                self.state.address, predecessor.address
+                            );
+
                             // todo transfer keys
 
                             // todo fix race conditions between read and write
@@ -370,7 +396,8 @@ impl SChord {
                                 }
                                 self.state.predecessors.write().push(predecessor);
                             } else {
-                                println!("Splitting with predecessor")
+                                // Replace predecessor
+                                self.state.predecessors.write()[0] = predecessor;
                             }
                         }
                         PeerMessage::InsertValue(key, value) => {
@@ -383,6 +410,18 @@ impl SChord {
 
                             self.state.local_storage.insert(key, value);
                         }
+                        PeerMessage::SetSuccessor(successor) => {
+                            println!(
+                                "{}: Set Successor: {}",
+                                self.state.address, successor.address
+                            );
+
+                            // todo fix race condition
+                            for i in 0..63 {
+                                self.state.finger_table.write()[i] = successor;
+                            }
+                        }
+
                         _ => {
                             return Err(anyhow!("Unexpected message type"));
                         }
@@ -390,6 +429,11 @@ impl SChord {
                 }
             }
         }
+    }
+
+    pub fn print_short(&self) {
+        println!(" P:{}", self.state.predecessors.read()[0].address);
+        println!(" S:{}", self.state.finger_table.read()[0].address);
     }
 
     pub fn print(&self) {

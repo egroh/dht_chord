@@ -158,6 +158,11 @@ impl P2pDht {
                 .split_node()
                 .await
                 .expect("Node Split encountered an error");
+
+            chord
+                .inform_predessecor_existance()
+                .await
+                .expect("Predecessor informing failed");
         }
         P2pDht {
             _default_store_duration: default_store_duration,
