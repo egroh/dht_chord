@@ -1,15 +1,9 @@
 mod tests {
-
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::api_communication::with_big_endian;
-    use crate::{
-        start_dht, ApiPacketHeader, DhtGetFailure, DhtGetResponse, DhtPut, P2pDht, API_DHT_GET,
-        API_DHT_PUT, API_DHT_SHUTDOWN,
-    };
     use bincode::Options;
     use serde::{Deserialize, Serialize};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,13 +11,19 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
 
+    use crate::api_communication::with_big_endian;
+    use crate::{
+        start_dht, ApiPacketHeader, DhtGetFailure, DhtGetResponse, DhtPut, P2pDht, API_DHT_GET,
+        API_DHT_PUT, API_DHT_SHUTDOWN,
+    };
+
     async fn start_peers(amount: u16) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
         let mut handles: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
 
         static COUNTER: AtomicU32 = AtomicU32::new(1);
 
         for j in 0..amount {
-            let i = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let i = COUNTER.fetch_add(1, Ordering::SeqCst);
             let dht = Arc::new(
                 P2pDht::new(
                     Duration::from_secs(60),

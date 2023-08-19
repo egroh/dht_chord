@@ -1,11 +1,12 @@
-use dashmap::DashMap;
-use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+use dashmap::DashMap;
+use parking_lot::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -63,7 +64,6 @@ impl SChord {
         });
         // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
         rx.recv().await.unwrap();
-
         handle
     }
 
@@ -72,76 +72,99 @@ impl SChord {
         server_address.hash(&mut hasher);
         let node_id = hasher.finish();
 
-        let mut finger_table = vec![];
-        let mut predecessors = vec![];
-
         if let Some(initial_peer) = initial_peer {
-            // Connect to initial node
-            let mut stream = TcpStream::connect(initial_peer).await.unwrap();
-            let (reader, writer) = stream.split();
-            let (mut tx, mut rx) = channels::channel(reader, writer);
+            let mut initial_peer_connection_result = async || -> Result<SChord, Box<dyn Error>> {
+                // Connect to initial node
+                let mut stream = TcpStream::connect(initial_peer).await?;
+                let (reader, writer) = stream.split();
+                let (mut tx, mut rx) = channels::channel(reader, writer);
 
-            // Acquire node responsible for the location of our id
-            // this node is automatically our successor
-            tx.send(PeerMessage::GetNode(node_id)).await.unwrap();
-            match rx.recv().await.unwrap() {
-                PeerMessage::GetNodeResponse(successor) => {
-                    // Connect to successor
-                    let mut stream = TcpStream::connect(successor.address).await.unwrap();
-                    let (reader, writer) = stream.split();
-                    let (mut tx, mut rx) = channels::channel(reader, writer);
+                // Acquire node responsible for the location of our id
+                // this node is automatically our successor
+                tx.send(PeerMessage::GetNode(node_id)).await?;
+                match rx.recv().await? {
+                    PeerMessage::GetNodeResponse(successor) => {
+                        // Connect to successor
+                        let mut stream = TcpStream::connect(successor.address).await?;
+                        let (reader, writer) = stream.split();
+                        let (mut tx, mut rx) = channels::channel(reader, writer);
 
-                    // Ask successor about predecessor
-                    tx.send(PeerMessage::GetPredecessor()).await.unwrap();
-                    match rx.recv().await.unwrap() {
-                        PeerMessage::GetPredecessorResponse(predecessor) => {
-                            // Add predecessor to list
-                            predecessors.push(RwLock::new(predecessor));
+                        // Ask successor about predecessor
+                        let mut finger_table = Vec::new();
+                        let mut predecessors = Vec::new();
+                        tx.send(PeerMessage::GetPredecessor).await?;
+                        match rx.recv().await? {
+                            PeerMessage::GetPredecessorResponse(predecessor) => {
+                                // Add predecessor to list
+                                predecessors.push(RwLock::new(predecessor));
 
-                            // Inform successor to split the node, as we now control part of his key space
-                            tx.send(PeerMessage::SplitNode(node_id)).await.unwrap();
+                                // Inform successor to split the node, as we now control part of his key space
+                                tx.send(PeerMessage::SplitNode(node_id)).await?;
 
-                            // Initialize finger table
-                            // todo: use predecessor for this
-                            for i in 0..63 {
-                                tx.send(PeerMessage::GetNode(
-                                    node_id.wrapping_add(2u64.pow(i as u32)),
-                                ))
-                                .await
-                                .unwrap();
-                                match rx.recv().await.unwrap() {
-                                    PeerMessage::GetNodeResponse(finger_peer) => {
-                                        finger_table.push(RwLock::new(finger_peer));
-                                    }
-                                    _ => {
-                                        panic!("Unexpected response to get_node from initial peer");
+                                // Initialize finger table
+                                // todo: use predecessor for this
+                                for i in 0..63 {
+                                    tx.send(PeerMessage::GetNode(
+                                        node_id.wrapping_add(2u64.pow(i as u32)),
+                                    ))
+                                    .await?;
+                                    match rx.recv().await? {
+                                        PeerMessage::GetNodeResponse(finger_peer) => {
+                                            finger_table.push(RwLock::new(finger_peer));
+                                        }
+                                        _ => {
+                                            return Err(
+                                                "Unexpected response to get_node from initial peer"
+                                                    .into(),
+                                            );
+                                        }
                                     }
                                 }
                             }
+                            _ => {
+                                return Err(
+                                    "Unexpected response to get_predecessor from initial peer"
+                                        .into(),
+                                );
+                            }
                         }
-                        _ => {
-                            panic!("Unexpected response to get_node from initial peer");
-                        }
+                        Ok(SChord {
+                            state: Arc::new(SChordState {
+                                default_store_duration: Duration::from_secs(60),
+                                max_store_duration: Duration::from_secs(600),
+                                local_storage: DashMap::new(),
+                                finger_table,
+                                successors: Vec::new(),
+                                node_id,
+                                predecessors,
+                                my_address: server_address,
+                            }),
+                        })
+                    }
+                    _ => {
+                        return Err("Unexpected response to get_node from initial peer".into());
                     }
                 }
-                _ => {
-                    panic!("Unexpected response to get_node from initial peer");
+            };
+            match initial_peer_connection_result().await {
+                Ok(s_chord) => s_chord,
+                Err(e) => {
+                    panic!("Failed communication with bootstrap peer: {}", e);
                 }
             }
         } else {
-            // If no initial peer was provided, we assume we are the first node and do not initialize any state until a node joins
-        }
-        SChord {
-            state: Arc::new(SChordState {
-                default_store_duration: Duration::from_secs(60),
-                max_store_duration: Duration::from_secs(600),
-                local_storage: DashMap::new(),
-                finger_table,
-                successors: vec![],
-                node_id,
-                predecessors,
-                my_address: server_address,
-            }),
+            SChord {
+                state: Arc::new(SChordState {
+                    default_store_duration: Duration::from_secs(60),
+                    max_store_duration: Duration::from_secs(600),
+                    local_storage: DashMap::new(),
+                    finger_table: Vec::new(),
+                    successors: Vec::new(),
+                    node_id,
+                    predecessors: Vec::new(),
+                    my_address: server_address,
+                }),
+            }
         }
     }
 
@@ -211,7 +234,7 @@ impl SChord {
                     ))
                     .await?;
                 }
-                PeerMessage::GetPredecessor() => {
+                PeerMessage::GetPredecessor => {
                     // Initialize answer to self
                     let mut predecessor = ChordPeer {
                         id: self.state.node_id,
@@ -225,7 +248,7 @@ impl SChord {
                     tx.send(PeerMessage::GetPredecessorResponse(predecessor))
                         .await?;
                 }
-                PeerMessage::SplitNode(..) => {
+                PeerMessage::SplitNode(_) => {
                     // todo: actually do something
                 }
                 _ => {

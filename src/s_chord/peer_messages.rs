@@ -1,5 +1,6 @@
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, SocketAddr};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct ChordPeer {
@@ -15,6 +16,6 @@ pub(crate) enum PeerMessage {
     GetValueResponse(Option<Vec<u8>>),
     InsertValue(u64, Vec<u8>),
     SplitNode(u64),
-    GetPredecessor(),
+    GetPredecessor,
     GetPredecessorResponse(ChordPeer),
 }
