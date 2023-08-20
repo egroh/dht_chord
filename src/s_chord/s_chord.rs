@@ -11,7 +11,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::s_chord::peer_messages::PeerMessage::GetValueResponse;
 use crate::s_chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
 
 macro_rules! connect_to_peer {
@@ -32,7 +31,7 @@ pub struct SChordState {
 
     node_id: u64,
     address: SocketAddr,
-    finger_table: Vec<RwLock<ChordPeer>>,
+    pub finger_table: Vec<RwLock<ChordPeer>>,
     predecessors: RwLock<Vec<ChordPeer>>,
 
     pub local_storage: DashMap<u64, Vec<u8>>,
@@ -101,13 +100,12 @@ impl SChord {
                         // Close connection to initial peer
                         tx.send(PeerMessage::CloseConnection).await?;
 
-                        let mut finger_table = Vec::new();
                         let mut predecessors = Vec::new();
                         let mut local_storage = DashMap::new();
                         // Connect to successor
                         let (mut tx, mut rx) = connect_to_peer!(successor.address);
                         loop {
-                            // Ask successor about predecessor
+                            // Ask predecessor
                             tx.send(PeerMessage::GetPredecessor).await?;
                             match rx.recv().await? {
                                 PeerMessage::GetPredecessorResponse(predecessor) => {
@@ -136,7 +134,6 @@ impl SChord {
                                     responsible_predecessor,
                                 )) => {
                                     successor = responsible_predecessor;
-                                    finger_table.clear();
                                     predecessors.clear();
                                     local_storage.clear();
                                     tx.send(PeerMessage::CloseConnection).await?;
@@ -149,22 +146,21 @@ impl SChord {
                             }
                         }
                         // Initialize finger table
-                        for i in 1..64 {
-                            tx.send(PeerMessage::GetNode(
-                                node_id.wrapping_add(2u64.pow(i as u32)),
-                            ))
-                            .await?;
-                            match rx.recv().await? {
-                                PeerMessage::GetNodeResponse(finger_peer) => {
-                                    finger_table.push(RwLock::new(finger_peer));
+                        let finger_table = (1..64)
+                            .map(|i| {
+                                if is_between_on_ring(2u64.pow(i as u32), node_id, successor.id) {
+                                    RwLock::new(ChordPeer {
+                                        id: node_id,
+                                        address: server_address,
+                                    })
+                                } else {
+                                    RwLock::new(ChordPeer {
+                                        id: successor.id,
+                                        address: successor.address,
+                                    })
                                 }
-                                _ => {
-                                    return Err(anyhow!(
-                                        "Unexpected response to get_node from initial peer"
-                                    ));
-                                }
-                            }
-                        }
+                            })
+                            .collect();
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
                         Ok(SChord {
@@ -217,9 +213,11 @@ impl SChord {
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         println!("Storage request for key {} on {}", key, self.state.address);
         if self.is_responsible_for_key(key) {
+            println!("Storing locally!");
             self.internal_insert(key, value, ttl).await
         } else {
             let peer = self.get_responsible_node(key).await?;
+            println!("Storing remotely! (on {})", peer.address);
 
             let mut stream = TcpStream::connect(peer.address).await?;
             let (reader, writer) = stream.split();
@@ -240,21 +238,15 @@ impl SChord {
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
         println!("Retrieving key {} from {}", key, self.state.address);
         if self.is_responsible_for_key(key) {
-            if self
-                .state
-                .local_storage
-                .get(&key)
-                .map(|entry| entry.value().clone())
-                .is_none()
-            {
-                eprintln!("Not found locally {}", self.state.address);
-            }
-
             self.state
                 .local_storage
                 .get(&key)
                 .map(|entry| entry.value().clone())
-                .ok_or(anyhow!("Value not found locally"))
+                .ok_or(anyhow!(
+                    "Key {} not found locally on node {}",
+                    key,
+                    self.state.address
+                ))
         } else {
             let peer = self.get_responsible_node(key).await?;
             let (mut tx, mut rx) = connect_to_peer!(peer.address);
@@ -322,6 +314,12 @@ impl SChord {
         loop {
             match rx.recv().await? {
                 PeerMessage::GetNode(id) => {
+                    println!(
+                        "{} asked {} to get node responsible for {}",
+                        self.state.address,
+                        self.get_predecessor().address,
+                        id
+                    );
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
                     if self.is_responsible_for_key(id) {
@@ -341,7 +339,7 @@ impl SChord {
                         .local_storage
                         .get(&key)
                         .map(|entry| entry.value().clone());
-                    tx.send(GetValueResponse(value)).await?;
+                    tx.send(PeerMessage::GetValueResponse(value)).await?;
                 }
                 PeerMessage::GetPredecessor => {
                     let predecessor = self.get_predecessor();
@@ -358,16 +356,26 @@ impl SChord {
                         });
                         if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
                             predecessors.insert(0, new_peer);
+                            println!("Finger table before split:");
+                            for entry in self.state.finger_table.iter() {
+                                println!("{:?}", entry);
+                            }
                             for (i, entry) in self.state.finger_table.iter().enumerate() {
                                 if is_between_on_ring(
                                     new_peer.id,
+                                    self.state.node_id.wrapping_add(2u64.pow((i + 1) as u32)),
                                     self.state.node_id,
-                                    self.state.node_id.wrapping_add(2u64.pow(i as u32)),
-                                ) && new_peer.id > entry.read().id
-                                // todo: deadlock?
-                                {
+                                ) && is_between_on_ring(
+                                    new_peer.id,
+                                    entry.read().id,
+                                    self.state.node_id,
+                                ) {
                                     *entry.write() = new_peer;
                                 }
+                            }
+                            println!("Finger table after split:");
+                            for entry in self.state.finger_table.iter() {
+                                println!("{:?}", entry);
                             }
                         }
                         predecessor
@@ -392,6 +400,12 @@ impl SChord {
                     }
                 }
                 PeerMessage::InsertValue(key, value, ttl) => {
+                    println!(
+                        "{} asked {} to store {}",
+                        rx.get().peer_addr().unwrap(),
+                        self.state.address,
+                        key
+                    );
                     self.internal_insert(key, value, ttl).await?;
                 }
                 PeerMessage::SetSuccessor(successor) => {
