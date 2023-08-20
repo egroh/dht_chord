@@ -222,7 +222,9 @@ mod tests {
     async fn test_multiple_store_get() {
         let dhts = start_peers(2).await;
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        print_dhts(&dhts);
 
         let (dht0, _) = &dhts[0];
         let (dht1, _) = &dhts[1];
