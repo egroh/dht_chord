@@ -342,7 +342,7 @@ mod tests {
 
     fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
         for (dht, _) in dhts {
-            println!("{}", dht.api_address);
+            println!("{} --- {}", dht.dht.state.node_id, dht.api_address);
             dht.dht.print_short();
             println!("Stored values:");
             for (key, value) in dht.dht.state.local_storage.clone() {

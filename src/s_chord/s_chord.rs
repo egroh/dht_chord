@@ -29,7 +29,7 @@ pub struct SChordState {
     default_store_duration: Duration,
     max_store_duration: Duration,
 
-    node_id: u64,
+    pub node_id: u64,
     address: SocketAddr,
     pub finger_table: Vec<RwLock<ChordPeer>>,
     predecessors: RwLock<Vec<ChordPeer>>,
@@ -161,6 +161,7 @@ impl SChord {
                                 }
                             })
                             .collect();
+                        // todo: stabilize
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
                         Ok(SChord {
@@ -456,6 +457,23 @@ fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
         value >= lower && value <= upper
     } else {
         // Wrap-around case
-        value <= lower || value >= upper
+        value >= lower || value <= upper
     }
+}
+
+#[test]
+fn test_is_between_on_ring() {
+    // using common code.
+    assert_ne!(
+        is_between_on_ring(
+            15203477739406956416,
+            16189758198029460966,
+            7565083766968620880
+        ),
+        is_between_on_ring(
+            15203477739406956416,
+            7565083766968620880,
+            16189758198029460966
+        ),
+    );
 }
