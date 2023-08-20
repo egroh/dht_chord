@@ -2,6 +2,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::thread::sleep;
     use std::time::Duration;
 
     use bincode::Options;
@@ -22,19 +23,19 @@ mod tests {
 
         static COUNTER: AtomicU32 = AtomicU32::new(1);
 
-        for j in 0..amount {
-            let i = COUNTER.fetch_add(1, Ordering::SeqCst);
+        for i in 0..amount {
+            let port_counter = COUNTER.fetch_add(1, Ordering::SeqCst);
             let dht = Arc::new(
                 P2pDht::new(
                     Duration::from_secs(60),
                     Duration::from_secs(60),
-                    format!("127.0.0.1:4{:0>4}", i)
+                    format!("127.0.0.1:4{:0>4}", port_counter)
                         .parse::<SocketAddr>()
                         .unwrap(),
-                    format!("127.0.0.1:3{:0>4}", i)
+                    format!("127.0.0.1:3{:0>4}", port_counter)
                         .parse::<SocketAddr>()
                         .unwrap(),
-                    if j == 0 {
+                    if i == 0 {
                         None
                     } else {
                         Some(handles[0].0.dht.get_address())

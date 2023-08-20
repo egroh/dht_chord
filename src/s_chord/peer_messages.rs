@@ -19,4 +19,5 @@ pub(crate) enum PeerMessage {
     GetPredecessor,
     GetPredecessorResponse(ChordPeer),
     SetSuccessor(ChordPeer),
+    CloseConnection,
 }

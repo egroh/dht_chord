@@ -58,7 +58,8 @@ impl SChord {
             tx.send(true).await.expect("Unable to send message");
             println!("SChord listening for peers on {}", server_address);
             loop {
-                let (stream, _socket_address) = listener.accept().await.unwrap();
+                let (stream, socket_address) = listener.accept().await.unwrap();
+                println!("New peer connection from: {}", socket_address);
                 let self_clone = SChord {
                     state: self_clone.state.clone(),
                 };
@@ -69,7 +70,7 @@ impl SChord {
                         }
                         Err(e) => {
                             // todo maybe send error message to peer
-                            eprintln!("Error in peer {}: {:?}", self_clone.state.address, e);
+                            eprintln!("Error in connection with peer {}: {:?}", socket_address, e);
                         }
                     }
                 });
@@ -89,6 +90,7 @@ impl SChord {
             address: self.state.address,
         }))
         .await?;
+        tx.send(PeerMessage::CloseConnection).await?;
         // todo: get relevant data from node
         Ok(())
     }
@@ -101,15 +103,15 @@ impl SChord {
         if let Some(initial_peer) = initial_peer {
             let initial_peer_connection_result = async || -> Result<SChord> {
                 // Connect to initial node
-                let mut stream = TcpStream::connect(initial_peer).await?;
-                let (reader, writer) = stream.split();
-                let (mut tx, mut rx) = channels::channel(reader, writer);
+                let (mut tx, mut rx) = connect_to_peer!(initial_peer);
 
                 // Acquire node responsible for the location of our id
                 // this node is automatically our successor
                 tx.send(PeerMessage::GetNode(node_id)).await?;
                 match rx.recv().await? {
                     PeerMessage::GetNodeResponse(successor) => {
+                        // Close connection to initial peer
+                        tx.send(PeerMessage::CloseConnection).await?;
                         // Connect to successor
                         let (mut tx, mut rx) = connect_to_peer!(successor.address);
 
@@ -148,6 +150,7 @@ impl SChord {
                                 ));
                             }
                         }
+                        tx.send(PeerMessage::CloseConnection).await?;
                         Ok(SChord {
                             state: Arc::new(SChordState {
                                 default_store_duration: Duration::from_secs(60),
@@ -209,7 +212,7 @@ impl SChord {
             let (mut tx, _) = channels::channel(reader, writer);
 
             tx.send(PeerMessage::InsertValue(key, value)).await?;
-            // todo maybe wait for success answer?
+            tx.send(PeerMessage::CloseConnection).await?;
             Ok(())
         }
     }
@@ -238,6 +241,7 @@ impl SChord {
             tx.send(PeerMessage::GetValue(key)).await?;
             match rx.recv().await? {
                 PeerMessage::GetValueResponse(option) => {
+                    tx.send(PeerMessage::CloseConnection).await?;
                     option.ok_or(anyhow!("Peer does not know value"))
                 }
                 _ => Err(anyhow!("Wrong response")),
@@ -269,7 +273,10 @@ impl SChord {
         // Ask successor about predecessor
         tx.send(PeerMessage::GetNode(key)).await?;
         match rx.recv().await? {
-            PeerMessage::GetNodeResponse(peer) => Ok(peer),
+            PeerMessage::GetNodeResponse(peer) => {
+                tx.send(PeerMessage::CloseConnection).await?;
+                Ok(peer)
+            }
             _ => Err(anyhow!("Wrong response")),
         }
     }
@@ -303,6 +310,7 @@ impl SChord {
             address: self.state.address,
         }))
         .await?;
+        tx.send(PeerMessage::CloseConnection).await?;
         // todo maybe response?
         Ok(())
     }
@@ -369,7 +377,10 @@ impl SChord {
 
                     // todo update finger table
                 }
-
+                PeerMessage::CloseConnection => {
+                    println!("{} closed their connection", stream.peer_addr().unwrap());
+                    return Ok(());
+                }
                 _ => {
                     return Err(anyhow!("Unexpected message type"));
                 }
