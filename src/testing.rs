@@ -151,10 +151,10 @@ mod tests {
             },
             payload: DhtPut {
                 ttl: 0,
-                _replication: 0,
-                _reserved: 0,
+                replication: 0,
+                reserved: 0,
                 key,
-                value: value,
+                value,
             },
         };
         stream
@@ -194,8 +194,8 @@ mod tests {
         let (dht, _) = &dhts[0];
         dht.put(DhtPut {
             ttl: 0,
-            _replication: 0,
-            _reserved: 0,
+            replication: 0,
+            reserved: 0,
             key,
             value: value.clone(),
         })
@@ -235,8 +235,8 @@ mod tests {
             // Put Value
             dht0.put(DhtPut {
                 ttl: 0,
-                _replication: 0,
-                _reserved: 0,
+                replication: 0,
+                reserved: 0,
                 key: *key,
                 value: value.clone(),
             })
@@ -247,8 +247,8 @@ mod tests {
             // Put Value
             dht1.put(DhtPut {
                 ttl: 0,
-                _replication: 0,
-                _reserved: 0,
+                replication: 0,
+                reserved: 0,
                 key: *key,
                 value: value.clone(),
             })
@@ -299,8 +299,8 @@ mod tests {
                     .0
                     .put(DhtPut {
                         ttl: 0,
-                        _replication: 0,
-                        _reserved: 0,
+                        replication: 0,
+                        reserved: 0,
                         key: *key,
                         value: value.clone(),
                     })

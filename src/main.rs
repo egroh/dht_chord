@@ -47,8 +47,8 @@ enum ApiPacketMessage {
 #[derive(Serialize, Deserialize, Debug)]
 struct DhtPut {
     ttl: u16,
-    _replication: u8,
-    _reserved: u8,
+    replication: u8,
+    reserved: u8,
     key: [u8; 32],
     value: Vec<u8>,
 }
@@ -134,12 +134,12 @@ impl ApiPacket {
 }
 
 struct P2pDht {
-    _default_store_duration: Duration,
-    _max_store_duration: Duration,
-    _public_server_address: SocketAddr,
+    default_store_duration: Duration,
+    max_store_duration: Duration,
+    public_server_address: SocketAddr,
     api_address: SocketAddr,
     dht: SChord,
-    _server_thread: JoinHandle<()>,
+    server_thread: JoinHandle<()>,
 }
 
 impl P2pDht {
@@ -160,17 +160,17 @@ impl P2pDht {
                 .expect("Node Split encountered an error");
 
             chord
-                .inform_predessecor_existance()
+                .inform_predecessor_existence()
                 .await
                 .expect("Predecessor informing failed");
         }
         P2pDht {
-            _default_store_duration: default_store_duration,
-            _max_store_duration: max_store_duration,
-            _public_server_address: public_server_address,
+            default_store_duration: default_store_duration,
+            max_store_duration: max_store_duration,
+            public_server_address: public_server_address,
             api_address,
             dht: chord,
-            _server_thread: thread,
+            server_thread: thread,
         }
     }
 
