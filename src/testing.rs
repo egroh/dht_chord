@@ -17,8 +17,11 @@ mod tests {
         API_DHT_PUT, API_DHT_SHUTDOWN,
     };
 
-    async fn start_peers(amount: usize) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
-        let mut handles: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
+    async fn start_peers(
+        amount: usize,
+        start_api_socket: bool,
+    ) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
+        let mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
 
         static COUNTER: AtomicU32 = AtomicU32::new(1);
 
@@ -37,7 +40,7 @@ mod tests {
                     if i == 0 {
                         None
                     } else {
-                        Some(handles[0].0.dht.get_address())
+                        Some(dhts[0].0.dht.get_address())
                     },
                 )
                 .await,
@@ -47,19 +50,23 @@ mod tests {
             // Open channel for inter thread communication
             let (tx, mut rx) = mpsc::channel(1);
 
-            handles.push((
+            dhts.push((
                 dht.clone(),
                 tokio::spawn(async move {
                     // Send signal that we are running
                     tx.send(true).await.expect("Unable to send message");
-                    start_dht(dht, api_listener).await.unwrap();
+
+                    // Only start api socket if requested
+                    if start_api_socket {
+                        start_dht(dht, api_listener).await.unwrap();
+                    }
                 }),
             ));
             // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
             rx.recv().await.unwrap();
         }
 
-        handles
+        dhts
     }
 
     async fn stop_dhts(mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
@@ -76,7 +83,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_start_two_peers() {
-        let dhts = start_peers(2).await;
+        let dhts = start_peers(2, true).await;
         stop_dhts(dhts).await;
     }
 
@@ -99,7 +106,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
-        let dhts = start_peers(1).await;
+        let dhts = start_peers(1, true).await;
 
         let (dht, _) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -135,7 +142,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
-        let dhts = start_peers(2).await;
+        let dhts = start_peers(2, true).await;
 
         let (dht, _) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -194,7 +201,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_store_get() {
-        let dhts = start_peers(1).await;
+        let dhts = start_peers(1, false).await;
 
         let key = [0x1; 32];
         let value = vec![0x1, 0x2, 0x3];
@@ -220,7 +227,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_multiple_store_get() {
-        let dhts = start_peers(2).await;
+        let dhts = start_peers(2, false).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -300,8 +307,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_hammer_store_get() {
-        let amount_peers: usize = 4;
-        let dhts = start_peers(amount_peers).await;
+        let amount_peers: usize = 10;
+        let dhts = start_peers(amount_peers, false).await;
 
         tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -350,15 +357,15 @@ mod tests {
 
     fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
         for (dht, _) in dhts {
-            println!("{} --- {}", dht.dht.state.node_id, dht.api_address);
+            println!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
             dht.dht.print_short();
             println!("Stored values:");
             for (key, value) in dht.dht.state.local_storage.clone() {
                 println!("  {:x}: {:?}", key, value);
             }
             println!("Finger table:");
-            for entry in &dht.dht.state.finger_table {
-                println!("{:?}", entry);
+            for entry in &dht.dht.state.finger_table[55..60] {
+                println!("{:?}", *entry.read());
             }
             println!("---");
         }

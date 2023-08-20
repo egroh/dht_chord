@@ -59,7 +59,6 @@ impl SChord {
             println!("SChord listening for peers on {}", server_address);
             loop {
                 let (stream, socket_address) = listener.accept().await.unwrap();
-                println!("New peer connection from: {}", socket_address);
                 let self_clone = SChord {
                     state: self_clone.state.clone(),
                 };
@@ -94,6 +93,7 @@ impl SChord {
 
                 // Acquire node responsible for the location of our id
                 // this node is automatically our successor
+                // this works because no node is aware of our existence yet
                 tx.send(PeerMessage::GetNode(node_id)).await?;
                 match rx.recv().await? {
                     PeerMessage::GetNodeResponse(mut successor) => {
@@ -102,6 +102,7 @@ impl SChord {
 
                         let mut predecessors = Vec::new();
                         let mut local_storage = DashMap::new();
+
                         // Connect to successor
                         let (mut tx, mut rx) = connect_to_peer!(successor.address);
                         loop {
@@ -109,6 +110,7 @@ impl SChord {
                             tx.send(PeerMessage::GetPredecessor).await?;
                             match rx.recv().await? {
                                 PeerMessage::GetPredecessorResponse(predecessor) => {
+                                    // initialize our predecessor
                                     predecessors.push(predecessor);
                                 }
                                 _ => {
@@ -117,6 +119,7 @@ impl SChord {
                                     ));
                                 }
                             }
+
                             // Ask successor to split
                             tx.send(PeerMessage::SplitRequest(ChordPeer {
                                 id: node_id,
@@ -128,12 +131,27 @@ impl SChord {
                                     for (key, value) in new_keys {
                                         local_storage.insert(key, value);
                                     }
+
+                                    // Inform predecessor that we are his successor now
+                                    // todo maybe fix race condition that predecessor may expect us to asnwer queries but server socket is not yet started
+                                    let (mut pre_tx, _) = connect_to_peer!(predecessors[0].address);
+                                    pre_tx
+                                        .send(PeerMessage::SetSuccessor(ChordPeer {
+                                            id: node_id,
+                                            address: server_address,
+                                        }))
+                                        .await?;
+
+                                    // todo maybe await response?
+
                                     break;
                                 }
                                 PeerMessage::SplitResponse(SplitResponse::Failure(
-                                    responsible_predecessor,
+                                    responsible_successor,
                                 )) => {
-                                    successor = responsible_predecessor;
+                                    // originally acquired successor is no longer responsible
+                                    // Therefore use the actually responsible successor and start over
+                                    successor = responsible_successor;
                                     predecessors.clear();
                                     local_storage.clear();
                                     tx.send(PeerMessage::CloseConnection).await?;
@@ -146,19 +164,14 @@ impl SChord {
                             }
                         }
                         // Initialize finger table
+                        // We point everything to our successor, which ensures proper functionality
+                        // Stabilize will later update the fingers with better values
                         let finger_table = (1..64)
                             .map(|i| {
-                                if is_between_on_ring(2u64.pow(i as u32), node_id, successor.id) {
-                                    RwLock::new(ChordPeer {
-                                        id: node_id,
-                                        address: server_address,
-                                    })
-                                } else {
-                                    RwLock::new(ChordPeer {
-                                        id: successor.id,
-                                        address: successor.address,
-                                    })
-                                }
+                                RwLock::new(ChordPeer {
+                                    id: successor.id,
+                                    address: successor.address,
+                                })
                             })
                             .collect();
                         // todo: stabilize
@@ -272,6 +285,10 @@ impl SChord {
     }
 
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
+        // This method should never be called when we are responsible for this key
+        // Otherwise we will attempt to contact ourself, which will only lead to bad things
+        assert!(!self.is_responsible_for_key(key));
+
         let diff = key.wrapping_sub(self.state.node_id);
         let finger_table_index = diff.leading_zeros() as usize;
 
@@ -315,15 +332,14 @@ impl SChord {
         loop {
             match rx.recv().await? {
                 PeerMessage::GetNode(id) => {
-                    println!(
-                        "{} asked {} to get node responsible for {}",
-                        self.state.address,
-                        self.get_predecessor().address,
-                        id
-                    );
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
                     if self.is_responsible_for_key(id) {
+                        println!(
+                            "{} was asked to get node responsible for {:x}, which is us",
+                            self.state.address, id
+                        );
+
                         tx.send(PeerMessage::GetNodeResponse(ChordPeer {
                             id: self.state.node_id,
                             address: self.state.address,
@@ -331,6 +347,10 @@ impl SChord {
                         .await?;
                     } else {
                         let response_node = self.get_responsible_node(id).await?;
+                        println!(
+                            "{} was asked to get node responsible for {:x}, which is {}",
+                            self.state.address, id, response_node.address,
+                        );
                         tx.send(PeerMessage::GetNodeResponse(response_node)).await?
                     }
                 }
@@ -350,34 +370,20 @@ impl SChord {
                 PeerMessage::SplitRequest(new_peer) => {
                     println!("{}: Split pred: {}", self.state.address, new_peer.address);
                     let predecessor = {
+                        // Aquire write lock for predecessors
                         let mut predecessors = self.state.predecessors.write();
+
+                        // Get first predecessor, and if not present ourselves
                         let predecessor = *predecessors.first().unwrap_or(&ChordPeer {
                             id: self.state.node_id,
                             address: self.state.address,
                         });
+
+                        // Check if the new peer is inbetween our predecessor and ourselves
+                        // If we the predecessor is us, this method also returns true as we then control all keys and are alone
                         if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
+                            // insert as new predecessor
                             predecessors.insert(0, new_peer);
-                            println!("Finger table before split:");
-                            for entry in self.state.finger_table.iter() {
-                                println!("{:?}", entry);
-                            }
-                            for (i, entry) in self.state.finger_table.iter().enumerate() {
-                                if is_between_on_ring(
-                                    new_peer.id,
-                                    self.state.node_id.wrapping_add(2u64.pow((i + 1) as u32)),
-                                    self.state.node_id,
-                                ) && is_between_on_ring(
-                                    new_peer.id,
-                                    entry.read().id,
-                                    self.state.node_id,
-                                ) {
-                                    *entry.write() = new_peer;
-                                }
-                            }
-                            println!("Finger table after split:");
-                            for entry in self.state.finger_table.iter() {
-                                println!("{:?}", entry);
-                            }
                         }
                         predecessor
                     };
@@ -415,10 +421,25 @@ impl SChord {
                         self.state.address, successor.address
                     );
 
-                    // todo update finger table
+                    // Update finger table
+                    // We update all entries which should now point to our successor
+                    for (i, entry) in self.state.finger_table.iter().enumerate() {
+                        if is_between_on_ring(
+                            self.state.node_id.wrapping_add(2u64.pow((i + 1) as u32)),
+                            self.state.node_id,
+                            successor.id,
+                        ) {
+                            *entry.write() = successor;
+                        } else {
+                            // Assert that we updated at least one entry, otherwise something is wrong
+                            assert_ne!(i, 0);
+                            break;
+                        }
+                    }
+                    // todo maybe send answer
+                    return Ok(());
                 }
                 PeerMessage::CloseConnection => {
-                    println!("{} closed their connection", stream.peer_addr().unwrap());
                     return Ok(());
                 }
                 _ => {
