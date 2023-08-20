@@ -11,7 +11,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::s_chord::peer_messages::{ChordPeer, PeerMessage};
+use crate::s_chord::peer_messages::PeerMessage::GetValueResponse;
+use crate::s_chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
 
 macro_rules! connect_to_peer {
     ($address:expr) => {{
@@ -32,7 +33,6 @@ pub struct SChordState {
     node_id: u64,
     address: SocketAddr,
     finger_table: Vec<RwLock<ChordPeer>>,
-    successors: RwLock<Vec<ChordPeer>>,
     predecessors: RwLock<Vec<ChordPeer>>,
 
     pub local_storage: DashMap<u64, Vec<u8>>,
@@ -44,6 +44,7 @@ impl SChord {
     }
 
     pub async fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
+        println!("Starting SChord server on {}", server_address);
         let self_clone = SChord {
             state: self.state.clone(),
         };
@@ -81,21 +82,8 @@ impl SChord {
         handle
     }
 
-    pub async fn split_node(&self) -> Result<()> {
-        let successor = self.state.finger_table[0].read();
-        let (mut tx, _) = connect_to_peer!(successor.address);
-
-        tx.send(PeerMessage::SplitNode(ChordPeer {
-            id: self.state.node_id,
-            address: self.state.address,
-        }))
-        .await?;
-        tx.send(PeerMessage::CloseConnection).await?;
-        // todo: get relevant data from node
-        Ok(())
-    }
-
     pub async fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {
+        println!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
         server_address.hash(&mut hasher);
         let node_id = hasher.finish();
@@ -109,62 +97,82 @@ impl SChord {
                 // this node is automatically our successor
                 tx.send(PeerMessage::GetNode(node_id)).await?;
                 match rx.recv().await? {
-                    PeerMessage::GetNodeResponse(successor) => {
+                    PeerMessage::GetNodeResponse(mut successor) => {
                         // Close connection to initial peer
                         tx.send(PeerMessage::CloseConnection).await?;
-                        // Connect to successor
-                        let (mut tx, mut rx) = connect_to_peer!(successor.address);
 
-                        // Ask successor about predecessor
                         let mut finger_table = Vec::new();
                         let mut predecessors = Vec::new();
-                        tx.send(PeerMessage::GetPredecessor).await?;
-                        match rx.recv().await? {
-                            PeerMessage::GetPredecessorResponse(predecessor) => {
-                                // Add predecessor to list
-                                predecessors.push(predecessor);
-
-                                // Initialize finger table
-                                // todo: use predecessor for this -- why?
-                                for i in 1..64 {
-                                    // todo: is this index correct?
-                                    tx.send(PeerMessage::GetNode(
-                                        node_id.wrapping_add(2u64.pow(i as u32)),
-                                    ))
-                                    .await?;
-                                    match rx.recv().await? {
-                                        PeerMessage::GetNodeResponse(finger_peer) => {
-                                            finger_table.push(finger_peer);
-                                        }
-                                        _ => {
-                                            return Err(anyhow!(
-                                                "Unexpected response to get_node from initial peer"
-                                            ));
-                                        }
-                                    }
+                        let mut local_storage = DashMap::new();
+                        // Connect to successor
+                        let (mut tx, mut rx) = connect_to_peer!(successor.address);
+                        loop {
+                            // Ask successor about predecessor
+                            tx.send(PeerMessage::GetPredecessor).await?;
+                            match rx.recv().await? {
+                                PeerMessage::GetPredecessorResponse(predecessor) => {
+                                    predecessors.push(predecessor);
+                                }
+                                _ => {
+                                    return Err(anyhow!(
+                                        "Unexpected response to get_predecessor from initial peer"
+                                    ));
                                 }
                             }
-                            _ => {
-                                return Err(anyhow!(
-                                    "Unexpected response to get_predecessor from initial peer"
-                                ));
+                            // Ask successor to split
+                            tx.send(PeerMessage::SplitRequest(ChordPeer {
+                                id: node_id,
+                                address: server_address,
+                            }))
+                            .await?;
+                            match rx.recv().await? {
+                                PeerMessage::SplitResponse(SplitResponse::Success(new_keys)) => {
+                                    for (key, value) in new_keys {
+                                        local_storage.insert(key, value);
+                                    }
+                                    break;
+                                }
+                                PeerMessage::SplitResponse(SplitResponse::Failure(
+                                    responsible_predecessor,
+                                )) => {
+                                    successor = responsible_predecessor;
+                                    finger_table.clear();
+                                    predecessors.clear();
+                                    local_storage.clear();
+                                    tx.send(PeerMessage::CloseConnection).await?;
+                                }
+                                _ => {
+                                    return Err(anyhow!(
+                                        "Unexpected response from successor while requesting split"
+                                    ))
+                                }
                             }
                         }
+                        // Initialize finger table
+                        for i in 1..64 {
+                            tx.send(PeerMessage::GetNode(
+                                node_id.wrapping_add(2u64.pow(i as u32)),
+                            ))
+                            .await?;
+                            match rx.recv().await? {
+                                PeerMessage::GetNodeResponse(finger_peer) => {
+                                    finger_table.push(RwLock::new(finger_peer));
+                                }
+                                _ => {
+                                    return Err(anyhow!(
+                                        "Unexpected response to get_node from initial peer"
+                                    ));
+                                }
+                            }
+                        }
+                        // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
                         Ok(SChord {
                             state: Arc::new(SChordState {
                                 default_store_duration: Duration::from_secs(60),
                                 max_store_duration: Duration::from_secs(600),
-                                local_storage: DashMap::new(),
-                                finger_table: (1..64)
-                                    .map(|_| {
-                                        RwLock::new(ChordPeer {
-                                            id: node_id,
-                                            address: server_address,
-                                        })
-                                    })
-                                    .collect(),
-                                successors: RwLock::new(Vec::new()),
+                                local_storage,
+                                finger_table,
                                 node_id,
                                 predecessors: RwLock::new(predecessors),
                                 address: server_address,
@@ -186,8 +194,14 @@ impl SChord {
                     default_store_duration: Duration::from_secs(60),
                     max_store_duration: Duration::from_secs(600),
                     local_storage: DashMap::new(),
-                    finger_table: Vec::new(),
-                    successors: RwLock::new(Vec::new()),
+                    finger_table: (1..64)
+                        .map(|_| {
+                            RwLock::new(ChordPeer {
+                                id: node_id,
+                                address: server_address,
+                            })
+                        })
+                        .collect(),
                     node_id,
                     predecessors: RwLock::new(Vec::new()),
                     address: server_address,
@@ -201,9 +215,9 @@ impl SChord {
             .await
     }
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
+        println!("Storage request for key {} on {}", key, self.state.address);
         if self.is_responsible_for_key(key) {
-            self.state.local_storage.insert(key, value);
-            Ok(())
+            self.internal_insert(key, value, ttl).await
         } else {
             let peer = self.get_responsible_node(key).await?;
 
@@ -211,13 +225,20 @@ impl SChord {
             let (reader, writer) = stream.split();
             let (mut tx, _) = channels::channel(reader, writer);
 
-            tx.send(PeerMessage::InsertValue(key, value)).await?;
+            tx.send(PeerMessage::InsertValue(key, value, ttl)).await?;
             tx.send(PeerMessage::CloseConnection).await?;
             Ok(())
         }
     }
 
+    async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
+        debug_assert!(self.is_responsible_for_key(key));
+        self.state.local_storage.insert(key, value);
+        Ok(())
+    }
+
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
+        println!("Retrieving key {} from {}", key, self.state.address);
         if self.is_responsible_for_key(key) {
             if self
                 .state
@@ -251,11 +272,7 @@ impl SChord {
 
     fn is_responsible_for_key(&self, key: u64) -> bool {
         if let Some(predecessor) = self.state.predecessors.read().first() {
-            let self_id = self.state.node_id;
-
-            let range_length = self_id.wrapping_sub(predecessor.id);
-            let wrapped_distance = key.wrapping_sub(predecessor.id);
-            wrapped_distance < range_length && wrapped_distance > 0
+            is_between_on_ring(key, predecessor.id, self.state.node_id)
         } else {
             true
         }
@@ -263,11 +280,16 @@ impl SChord {
 
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         let diff = key.wrapping_sub(self.state.node_id);
-        let entry = diff.leading_zeros();
-        let finger_table_index = usize::try_from(entry)?;
+        let finger_table_index = diff.leading_zeros() as usize;
 
         // Connect to successor
         let address = self.state.finger_table[finger_table_index].read().address;
+        if address == self.state.address {
+            return Ok(ChordPeer {
+                id: self.state.node_id,
+                address: self.state.address,
+            });
+        }
         let (mut tx, mut rx) = connect_to_peer!(address);
 
         // Ask successor about predecessor
@@ -293,28 +315,6 @@ impl SChord {
             })
     }
 
-    pub async fn inform_predecessor_existence(&self) -> Result<()> {
-        // Connect to successor
-        let (mut tx, _) = connect_to_peer!(
-            self.state
-                .predecessors
-                .read()
-                .first()
-                .ok_or(anyhow!("No predecessor"))?
-                .address
-        );
-
-        // Ask successor about predecessor // todo: do these comments use successor / predecessor correctly?
-        tx.send(PeerMessage::SetSuccessor(ChordPeer {
-            id: self.state.node_id,
-            address: self.state.address,
-        }))
-        .await?;
-        tx.send(PeerMessage::CloseConnection).await?;
-        // todo maybe response?
-        Ok(())
-    }
-
     /// Handle incoming requests from peers
     async fn accept_peer_connection(&self, mut stream: TcpStream) -> Result<()> {
         let (reader, writer) = stream.split();
@@ -336,38 +336,63 @@ impl SChord {
                     }
                 }
                 PeerMessage::GetValue(key) => {
-                    tx.send(PeerMessage::GetValueResponse(
-                        self.state
-                            .local_storage
-                            .get(&key)
-                            .map(|entry| entry.value().clone()),
-                    ))
-                    .await?;
+                    let value = self
+                        .state
+                        .local_storage
+                        .get(&key)
+                        .map(|entry| entry.value().clone());
+                    tx.send(GetValueResponse(value)).await?;
                 }
                 PeerMessage::GetPredecessor => {
                     let predecessor = self.get_predecessor();
                     tx.send(PeerMessage::GetPredecessorResponse(predecessor))
                         .await?;
                 }
-                PeerMessage::SplitNode(predecessor) => {
-                    println!(
-                        "{}: Split pred: {}",
-                        self.state.address, predecessor.address
-                    );
+                PeerMessage::SplitRequest(new_peer) => {
+                    println!("{}: Split pred: {}", self.state.address, new_peer.address);
+                    let predecessor = {
+                        let mut predecessors = self.state.predecessors.write();
+                        let predecessor = *predecessors.first().unwrap_or(&ChordPeer {
+                            id: self.state.node_id,
+                            address: self.state.address,
+                        });
+                        if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
+                            predecessors.insert(0, new_peer);
+                            for (i, entry) in self.state.finger_table.iter().enumerate() {
+                                if is_between_on_ring(
+                                    new_peer.id,
+                                    self.state.node_id,
+                                    self.state.node_id.wrapping_add(2u64.pow(i as u32)),
+                                ) && new_peer.id > entry.read().id
+                                // todo: deadlock?
+                                {
+                                    *entry.write() = new_peer;
+                                }
+                            }
+                        }
+                        predecessor
+                    };
 
-                    // todo transfer keys
-
-                    // todo update predecessor and finger table
-                }
-                PeerMessage::InsertValue(key, value) => {
-                    if !self.is_responsible_for_key(key) {
-                        // todo maybe make this more failsafe?
-                        return Err(anyhow!(
-                            "Peer tried to insert key which we are not responsible for"
-                        ));
+                    if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
+                        let mut values = Vec::new();
+                        for entry in self.state.local_storage.iter() {
+                            let key = *entry.key();
+                            let value = entry.value();
+                            if is_between_on_ring(key, predecessor.id, new_peer.id) {
+                                values.push((key, value.clone()));
+                            }
+                        }
+                        tx.send(PeerMessage::SplitResponse(SplitResponse::Success(values)))
+                            .await?;
+                    } else {
+                        tx.send(PeerMessage::SplitResponse(SplitResponse::Failure(
+                            predecessor,
+                        )))
+                        .await?;
                     }
-
-                    self.state.local_storage.insert(key, value);
+                }
+                PeerMessage::InsertValue(key, value, ttl) => {
+                    self.internal_insert(key, value, ttl).await?;
                 }
                 PeerMessage::SetSuccessor(successor) => {
                     println!(
@@ -407,5 +432,16 @@ impl SChord {
         {
             println!(" F {:x}: {}", entry.id, entry.address);
         }
+    }
+}
+fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
+    if lower == upper {
+        return true;
+    } else if lower < upper {
+        // No wrap-around needed
+        value >= lower && value <= upper
+    } else {
+        // Wrap-around case
+        value <= lower || value >= upper
     }
 }

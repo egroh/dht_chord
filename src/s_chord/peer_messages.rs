@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +15,17 @@ pub(crate) enum PeerMessage {
     GetNodeResponse(ChordPeer),
     GetValue(u64),
     GetValueResponse(Option<Vec<u8>>),
-    InsertValue(u64, Vec<u8>),
-    SplitNode(ChordPeer),
+    InsertValue(u64, Vec<u8>, Duration),
+    SplitRequest(ChordPeer),
+    SplitResponse(SplitResponse),
     GetPredecessor,
     GetPredecessorResponse(ChordPeer),
     SetSuccessor(ChordPeer),
     CloseConnection,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) enum SplitResponse {
+    Success(Vec<(u64, Vec<u8>)>),
+    Failure(ChordPeer), // Predecessor that is responsible instead
 }

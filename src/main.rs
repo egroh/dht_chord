@@ -152,18 +152,6 @@ impl P2pDht {
     ) -> Self {
         let chord = SChord::new(initial_peer, public_server_address).await;
         let thread = chord.start_server_socket(public_server_address).await;
-        if initial_peer.is_some() {
-            // Inform successor to split the node, as we now control part of his key space
-            chord
-                .split_node()
-                .await
-                .expect("Node Split encountered an error");
-
-            chord
-                .inform_predecessor_existence()
-                .await
-                .expect("Predecessor informing failed");
-        }
         P2pDht {
             default_store_duration: default_store_duration,
             max_store_duration: max_store_duration,

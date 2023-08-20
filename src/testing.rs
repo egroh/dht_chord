@@ -2,7 +2,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
-    use std::thread::sleep;
     use std::time::Duration;
 
     use bincode::Options;
@@ -179,6 +178,15 @@ mod tests {
         // Read response
         let bytes_read = stream.read(&mut buf).await.unwrap();
         let received_data: GetResponse = bincode::deserialize(&buf[..bytes_read]).unwrap();
+
+        println!("Send close");
+        let header = ApiPacketHeader {
+            size: 4,
+            message_type: API_DHT_SHUTDOWN,
+        };
+        let mut buf = with_big_endian().serialize(&header).unwrap();
+        buf.extend(key);
+        stream.write_all(&buf).await.unwrap();
 
         assert_eq!(received_data.payload.key, key);
         stop_dhts(dhts).await;
