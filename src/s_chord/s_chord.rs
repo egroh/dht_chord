@@ -166,8 +166,8 @@ impl SChord {
                         // Initialize finger table
                         // We point everything to our successor, which ensures proper functionality
                         // Stabilize will later update the fingers with better values
-                        let finger_table = (1..64)
-                            .map(|i| {
+                        let finger_table = (0..64)
+                            .map(|_| {
                                 RwLock::new(ChordPeer {
                                     id: successor.id,
                                     address: successor.address,
@@ -204,7 +204,7 @@ impl SChord {
                     default_store_duration: Duration::from_secs(60),
                     max_store_duration: Duration::from_secs(600),
                     local_storage: DashMap::new(),
-                    finger_table: (1..64)
+                    finger_table: (0..64)
                         .map(|_| {
                             RwLock::new(ChordPeer {
                                 id: node_id,
@@ -225,7 +225,7 @@ impl SChord {
             .await
     }
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
-        println!("Storage request for key {} on {}", key, self.state.address);
+        println!("{} API storage insert key {}", self.state.address, key);
         if self.is_responsible_for_key(key) {
             println!("Storing locally!");
             self.internal_insert(key, value, ttl).await
@@ -286,23 +286,67 @@ impl SChord {
 
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         // This method should never be called when we are responsible for this key
-        // Otherwise we will attempt to contact ourself, which will only lead to bad things
         assert!(!self.is_responsible_for_key(key));
 
-        let diff = key.wrapping_sub(self.state.node_id);
-        let finger_table_index = diff.leading_zeros() as usize;
+        // Check if successor is responsible
+        let successor = *self
+            .state
+            .finger_table
+            .first()
+            .ok_or(anyhow!["Finger table is empty"])?
+            .read();
 
-        // Connect to successor
-        let address = self.state.finger_table[finger_table_index].read().address;
-        if address == self.state.address {
-            return Ok(ChordPeer {
-                id: self.state.node_id,
-                address: self.state.address,
-            });
-        }
-        let (mut tx, mut rx) = connect_to_peer!(address);
+        // If successor is responsible, we return our successor
+        // This is required, as otherwise we will not consider routing to our successor,
+        // since he is not before the key (since we are the node before the key)
+        let (finger, finger_index) = if is_between_on_ring(key, self.state.node_id, successor.id) {
+            (successor, 99)
+        } else {
+            // Default to largest finger, this is the case if no finger is between ourselves and the key
+            // Save largest finger before checking for smaller, as the last entry might be
+            // modified to be after our key while checking
+            let mut finger = *self
+                .state
+                .finger_table
+                .last()
+                .ok_or(anyhow!("Last entry in finger table does not exist"))?
+                .read();
+            let mut finger_index = 100;
 
-        // Ask successor about predecessor
+            // Find the peer with the largest distance from us which is between the key and us
+            // This ensures that the responsible node is after the node which we attempt to contact
+            // Otherwise we might build a routing loop since we "skipped" the actual responsible node
+            for (finger_table_index, value) in self.state.finger_table.iter().rev().enumerate() {
+                // Copy finger, since other threads might attempt to change it
+                // It does not matter if this finger is outdated, as this does not impact functionality
+                let finger_iter = *value.read();
+
+                // Check if finger is between key and us, so responsible node is after the finger
+                if is_between_on_ring(finger_iter.id, self.state.node_id, key) {
+                    finger = finger_iter;
+                    finger_index = finger_table_index;
+                    break;
+                }
+            }
+
+            // Assert that the key is after the node we try to contact, otherwise we might get routing loops
+            assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
+
+            (finger, finger_index)
+        };
+
+        println!(
+            "{} - {:x} looking up node responsible for {:x}, will now ask finger index {}, {} - {:x}",
+            self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
+        );
+
+        // Assert that we do not try to route things to ourselves
+        assert_ne!(finger.id, self.state.node_id);
+
+        let (mut tx, mut rx) = connect_to_peer!(finger.address);
+
+        // contact finger and ask for responsible node
+        // finger will recursively find out responsible node
         tx.send(PeerMessage::GetNode(key)).await?;
         match rx.recv().await? {
             PeerMessage::GetNodeResponse(peer) => {
@@ -336,8 +380,8 @@ impl SChord {
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
                     if self.is_responsible_for_key(id) {
                         println!(
-                            "{} was asked to get node responsible for {:x}, which is us",
-                            self.state.address, id
+                            "{} - {:x} was asked for node responsible  {:x}, which is us",
+                            self.state.address, self.state.node_id, id
                         );
 
                         tx.send(PeerMessage::GetNodeResponse(ChordPeer {
@@ -347,10 +391,6 @@ impl SChord {
                         .await?;
                     } else {
                         let response_node = self.get_responsible_node(id).await?;
-                        println!(
-                            "{} was asked to get node responsible for {:x}, which is {}",
-                            self.state.address, id, response_node.address,
-                        );
                         tx.send(PeerMessage::GetNodeResponse(response_node)).await?
                     }
                 }
@@ -407,12 +447,7 @@ impl SChord {
                     }
                 }
                 PeerMessage::InsertValue(key, value, ttl) => {
-                    println!(
-                        "{} asked {} to store {}",
-                        rx.get().peer_addr().unwrap(),
-                        self.state.address,
-                        key
-                    );
+                    println!("{} asked to store {:x}", self.state.address, key);
                     self.internal_insert(key, value, ttl).await?;
                 }
                 PeerMessage::SetSuccessor(successor) => {
@@ -425,7 +460,7 @@ impl SChord {
                     // We update all entries which should now point to our successor
                     for (i, entry) in self.state.finger_table.iter().enumerate() {
                         if is_between_on_ring(
-                            self.state.node_id.wrapping_add(2u64.pow((i + 1) as u32)),
+                            self.state.node_id.wrapping_add(2u64.pow(i as u32)),
                             self.state.node_id,
                             successor.id,
                         ) {
