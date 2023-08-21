@@ -322,7 +322,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                                     return Ok(());
                                 }
                                 ApiPacketMessage::Unparsed(_) => {}
-                                _ => {}
+                                _ => return Err("Unknown api package received".into()),
                             }
                         }
                     }

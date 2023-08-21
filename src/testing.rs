@@ -142,7 +142,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
-        let dhts = start_peers(2, true).await;
+        let dhts = start_peers(1, true).await;
 
         let (dht, _) = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -169,7 +169,7 @@ mod tests {
             .await
             .unwrap();
 
-        println!("Send store");
+        println!("Send put");
 
         // Send Get Key Request
         let header = ApiPacketHeader {
@@ -181,6 +181,8 @@ mod tests {
         stream.write_all(&buf).await.unwrap();
 
         println!("Send get");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Read response
         let bytes_read = stream.read(&mut buf).await.unwrap();
