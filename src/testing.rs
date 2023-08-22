@@ -7,7 +7,6 @@ mod tests {
     use bincode::Options;
     use env_logger::Env;
     use log::{debug, error, info};
-    use serde::{Deserialize, Serialize};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::mpsc;
@@ -15,8 +14,7 @@ mod tests {
 
     use crate::api_communication::with_big_endian;
     use crate::{
-        start_dht, ApiPacketHeader, DhtGetFailure, DhtGetResponse, DhtPut, P2pDht, API_DHT_GET,
-        API_DHT_PUT, API_DHT_SHUTDOWN,
+        start_dht, ApiPacketHeader, DhtPut, P2pDht, API_DHT_GET, API_DHT_PUT, API_DHT_SHUTDOWN,
     };
 
     async fn start_peers(
@@ -89,23 +87,6 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
-    #[derive(Serialize, Debug)]
-    struct Put {
-        header: ApiPacketHeader,
-        payload: DhtPut,
-    }
-    #[derive(Deserialize, Debug)]
-    struct GetFailure {
-        _header: ApiPacketHeader,
-        payload: DhtGetFailure,
-    }
-
-    #[derive(Deserialize, Debug)]
-    struct GetResponse {
-        _header: ApiPacketHeader,
-        payload: DhtGetResponse,
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -126,10 +107,14 @@ mod tests {
         stream.write_all(&buf).await.unwrap();
 
         // Read response
-        let bytes_read = stream.read(&mut buf).await.unwrap();
-        let received_data: GetFailure = bincode::deserialize(&buf[..bytes_read]).unwrap();
-
-        assert_eq!(received_data.payload.key, key);
+        let mut response = [0; 36];
+        let bytes_read = stream.read_exact(&mut response).await.unwrap();
+        assert_eq!(
+            u16::from_be_bytes((&response[2..4]).try_into().unwrap()),
+            653
+        );
+        assert_eq!(response[4..], key);
+        assert_eq!(bytes_read, 36);
 
         // Send shutdown request
         let buf = with_big_endian()
@@ -155,44 +140,58 @@ mod tests {
         let value = vec![0x1, 0x2, 0x3];
 
         // Send Put Key Request
-        let put_message = Put {
-            header: ApiPacketHeader {
-                size: 4 + 4 + key.len() as u16 + value.len() as u16,
-                message_type: API_DHT_PUT,
-            },
-            payload: DhtPut {
-                ttl: 0,
-                replication: 0,
-                reserved: 0,
-                key,
-                value,
-            },
+        info!("Sending put");
+        let header = ApiPacketHeader {
+            size: 4 + 4 + key.len() as u16 + value.len() as u16,
+            message_type: API_DHT_PUT,
         };
-        stream
-            .write_all(&with_big_endian().serialize(&put_message).unwrap())
-            .await
-            .unwrap();
+        let payload = DhtPut {
+            ttl: 0,
+            replication: 0,
+            reserved: 0,
+            key,
+            value: value.clone(),
+        };
+        let mut buf = Vec::new();
+        buf.extend(with_big_endian().serialize(&header).unwrap());
+        buf.extend(with_big_endian().serialize(&payload.ttl).unwrap());
+        buf.extend(with_big_endian().serialize(&payload.replication).unwrap());
+        buf.extend(with_big_endian().serialize(&payload.reserved).unwrap());
+        buf.extend(payload.key);
+        buf.extend(payload.value);
 
-        info!("Send put");
+        debug!("Content of put request: {:?}", buf);
+        debug!("Length of put request: {:?}", buf.len());
+        assert_eq!(header.size as usize, buf.len());
+        stream.write_all(&buf).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send Get Key Request
+        info!("Sending get");
         let header = ApiPacketHeader {
             size: 4 + key.len() as u16,
             message_type: API_DHT_GET,
         };
         let mut buf = with_big_endian().serialize(&header).unwrap();
         buf.extend(key);
+        debug!("Content of get request: {:?}", buf);
+        debug!("Length of get request: {:?}", buf.len());
+        assert_eq!(header.size as usize, buf.len());
         stream.write_all(&buf).await.unwrap();
 
-        info!("Send get");
-
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
         // Read response
-        let bytes_read = stream.read(&mut buf).await.unwrap();
-        let received_data: GetResponse = bincode::deserialize(&buf[..bytes_read]).unwrap();
+        let mut response = [0; 39];
+        let bytes_read = stream.read_exact(&mut response).await.unwrap();
+        assert_eq!(
+            u16::from_be_bytes((&response[2..4]).try_into().unwrap()),
+            652
+        );
+        assert_eq!(response[4..36], key);
+        assert_eq!(response[36..], value);
+        assert_eq!(bytes_read, 39);
 
-        info!("Send close");
+        info!("Sending close");
         let header = ApiPacketHeader {
             size: 4,
             message_type: API_DHT_SHUTDOWN,
@@ -201,7 +200,6 @@ mod tests {
         buf.extend(key);
         stream.write_all(&buf).await.unwrap();
 
-        assert_eq!(received_data.payload.key, key);
         stop_dhts(dhts).await;
     }
 

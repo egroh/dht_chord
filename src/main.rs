@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use bincode::Options;
 use ini::ini;
-use log::{info, warn};
-use serde::{Deserialize, Serialize};
+use log::{debug, info, warn};
+use serde::{Deserialize, Serialize, Serializer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpListener;
@@ -45,7 +45,7 @@ enum ApiPacketMessage {
     Unparsed(Vec<u8>),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 struct DhtPut {
     ttl: u16,
     replication: u8,
@@ -59,13 +59,13 @@ struct DhtGet {
     key: [u8; 32],
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 struct DhtGetResponse {
     key: [u8; 32],
     value: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Debug)]
 struct DhtGetFailure {
     key: [u8; 32],
 }
@@ -96,7 +96,19 @@ impl ApiPacket {
                                 format!["DHT PUT invalid size: {}", self.header.size].into()
                             );
                         }
-                        self.message = ApiPacketMessage::Put(with_big_endian().deserialize(v)?);
+                        let ttl = u16::from_be_bytes([v[0], v[1]]);
+                        let replication = v[2];
+                        let reserved = v[3];
+                        let mut key = &v[4..36];
+                        let value = v[36..].to_vec();
+                        debug_assert!(value.len() == self.header.size as usize - 40);
+                        self.message = ApiPacketMessage::Put(DhtPut {
+                            ttl,
+                            replication,
+                            reserved,
+                            key: key.try_into().unwrap(),
+                            value,
+                        });
                     }
                     API_DHT_GET => {
                         if self.header.size != 4 + 32 {
@@ -113,16 +125,10 @@ impl ApiPacket {
                         self.message = ApiPacketMessage::Shutdown;
                     }
                     API_DHT_FAILURE => {
-                        if self.header.size != 4 + 32 {
-                            return Err("Invalid size".into());
-                        }
-                        self.message = ApiPacketMessage::Failure(with_big_endian().deserialize(v)?);
+                        panic!("We should only send these");
                     }
                     API_DHT_SUCCESS => {
-                        if self.header.size != 4 + 32 {
-                            return Err("Invalid size".into());
-                        }
-                        self.message = ApiPacketMessage::Success(with_big_endian().deserialize(v)?);
+                        panic!("We should only send these");
                     }
                     _ => return Err("Unknown message type".into()),
                 }
@@ -154,9 +160,9 @@ impl P2pDht {
         let chord = SChord::new(initial_peer, public_server_address).await;
         let thread = chord.start_server_socket(public_server_address).await;
         P2pDht {
-            default_store_duration: default_store_duration,
-            max_store_duration: max_store_duration,
-            public_server_address: public_server_address,
+            default_store_duration,
+            max_store_duration,
+            public_server_address,
             api_address,
             dht: chord,
             server_thread: thread,
@@ -265,7 +271,8 @@ async fn create_dht_from_command_line_arguments() -> Arc<P2pDht> {
 async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Box<dyn Error>> {
     info!("Listening for API Calls on {}", dht.api_address);
     loop {
-        let (stream, _socket_address) = api_listener.accept().await?;
+        let (stream, socket_address) = api_listener.accept().await?;
+        debug!("New API connection from: {}", socket_address);
         let dht = Arc::clone(&dht);
         let (mut reader, writer) = stream.into_split();
         let writer = Arc::new(Mutex::new(writer));
@@ -293,6 +300,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                                 if let Ok(header_success) =
                                     with_big_endian().deserialize(&header_bytes)
                                 {
+                                    debug!("Deserialized header: {:?}", header_success);
                                     packet.header = header_success;
                                 } else {
                                     return Err("Could not deserialize header".into());
@@ -302,6 +310,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                             packet.parse(*byte)?;
                             match packet.message {
                                 ApiPacketMessage::Put(p) => {
+                                    debug!("Received put request: {:?}", p);
                                     let dht = dht.clone();
                                     tokio::spawn(async move {
                                         dht.put(p).await;
@@ -310,6 +319,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                                     packet = ApiPacket::default();
                                 }
                                 ApiPacketMessage::Get(g) => {
+                                    debug!("Received get request: {:?}", g);
                                     let dht = dht.clone();
                                     let writer = writer.clone();
                                     tokio::spawn(async move {
@@ -319,6 +329,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                                     packet = ApiPacket::default();
                                 }
                                 ApiPacketMessage::Shutdown => {
+                                    debug!("Received shutdown request!");
                                     // todo: shutdown dht server
                                     return Ok(());
                                 }
