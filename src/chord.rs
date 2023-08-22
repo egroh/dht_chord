@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use parking_lot::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -301,6 +301,8 @@ impl SChord {
         // This is required, as otherwise we will not consider routing to our successor,
         // since he is not before the key (since we are the node before the key)
         let (finger, finger_index) = if is_between_on_ring(key, self.state.node_id, successor.id) {
+            // Assert that we do not try to route things to ourselves
+            debug_assert_ne!(successor.id, self.state.node_id);
             (successor, 99)
         } else {
             // Default to largest finger, this is the case if no finger is between ourselves and the key
@@ -325,19 +327,14 @@ impl SChord {
                 // Check if finger is between key and us, so responsible node is after the finger
                 if is_between_on_ring(finger_iter.id, self.state.node_id, key) {
                     finger = finger_iter;
-                    finger_index = finger_table_index;
+                    // Index is reversed because we iterate in reverse
+                    finger_index = 64 - finger_table_index;
                     break;
                 }
             }
-            // todo maybe fix this
-            /*
-                if is_between_on_ring(key, self.state.node_id, finger.id) {
-                    println!(
-                "{} - {:x} looking up node responsible for {:x}, FAILURE finger index {}, {} - {:x}",
-                self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
-            );
-                }
-                */
+
+            // Assert that we do not try to route things to ourselves
+            debug_assert_ne!(finger.id, self.state.node_id);
 
             // Assert that the key is after the node we try to contact, otherwise we might get routing loops
             debug_assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
@@ -349,9 +346,6 @@ impl SChord {
             "{} - {:x} looking up node responsible for {:x}, will now ask finger index {}, {} - {:x}",
             self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
         );
-
-        // Assert that we do not try to route things to ourselves
-        debug_assert_ne!(finger.id, self.state.node_id);
 
         let (mut tx, mut rx) = connect_to_peer!(finger.address);
 
@@ -424,18 +418,40 @@ impl SChord {
                         let mut predecessors = self.state.predecessors.write();
 
                         // Get first predecessor, and if not present ourselves
-                        let predecessor = *predecessors.first().unwrap_or(&ChordPeer {
+                        let had_predecessor = predecessors.len() > 0;
+                        let predecessor_or_self = *predecessors.first().unwrap_or(&ChordPeer {
                             id: self.state.node_id,
                             address: self.state.address,
                         });
 
                         // Check if the new peer is inbetween our predecessor and ourselves
                         // If we the predecessor is us, this method also returns true as we then control all keys and are alone
-                        if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
+                        if is_between_on_ring(
+                            new_peer.id,
+                            predecessor_or_self.id,
+                            self.state.node_id,
+                        ) {
+                            // Special case where we did not have a predecessor before
+                            if !had_predecessor {
+                                // in that case we did control the entire address space and our finger table is filled
+                                // With entries pointing to ourselves
+                                // Therefore our successor is also our predecessor and we update all entries
+                                // with a reference to our predecessor
+                                for entry in self.state.finger_table.iter() {
+                                    let mut entry = entry.write();
+
+                                    // Only update if it is a reference to ourselves
+                                    if entry.id == self.state.node_id {
+                                        *entry = new_peer;
+                                    }
+                                }
+                                self.assert_finger_table_not_contain_self();
+                            }
+
                             // insert as new predecessor
                             predecessors.insert(0, new_peer);
                         }
-                        predecessor
+                        predecessor_or_self
                     };
 
                     if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
@@ -481,6 +497,7 @@ impl SChord {
                             break;
                         }
                     }
+                    self.assert_finger_table_not_contain_self();
                     // todo maybe send answer
                     return Ok(());
                 }
@@ -490,6 +507,16 @@ impl SChord {
                 _ => {
                     return Err(anyhow!("Unexpected message type"));
                 }
+            }
+        }
+    }
+
+    fn assert_finger_table_not_contain_self(&self) {
+        for (i, entry) in self.state.finger_table.iter().enumerate() {
+            // Checks if the routing table contains ourselves, which should never be the case
+            if entry.read().id == self.state.node_id {
+                error!("Invalid entry at index {}", i);
+                panic!("Reached invalid state");
             }
         }
     }
@@ -504,14 +531,15 @@ impl SChord {
         for predecessor in self.state.predecessors.read().iter() {
             debug!(" P {:x}: {}", predecessor.id, predecessor.address);
         }
-        for entry in self
+        for (i, entry) in self
             .state
             .finger_table
             .iter()
             .take(10)
             .map(|entry| entry.read())
+            .enumerate()
         {
-            debug!(" F {:x}: {}", entry.id, entry.address);
+            debug!(" F {} {:x}: {}", i, entry.id, entry.address);
         }
     }
 }

@@ -352,7 +352,7 @@ mod tests {
         let amount_peers: usize = 10;
         let dhts = start_peers(amount_peers, false).await;
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // tokio::time::sleep(Duration::from_millis(50)).await;
 
         let pairs_size: usize = 16;
         let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
