@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bincode::Options;
+use env_logger::Env;
 use ini::ini;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize, Serializer};
@@ -220,8 +221,8 @@ impl P2pDht {
 
 async fn create_dht_from_command_line_arguments() -> Arc<P2pDht> {
     let args = env::args().collect::<Vec<String>>();
-    assert!(args.len() >= 2);
-    assert_eq!(args[1], "-c");
+    assert!(args.len() >= 2, "Usage: {} -c <config>", args[0]);
+    assert_eq!(args[1], "-c", "Usage: {} -c <config>", args[0]);
     let config = ini!(&args[2]);
     let default_store_duration = Duration::from_secs(
         config["dht"]["default_store_duration"]
@@ -351,6 +352,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
 async fn main() -> Result<(), Box<dyn Error>> {
     // todo: RPS communication for bootstrap peers or get from config file
 
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let dht = create_dht_from_command_line_arguments().await;
     let api_listener = TcpListener::bind(dht.api_address).await.unwrap();
     start_dht(dht, api_listener).await
