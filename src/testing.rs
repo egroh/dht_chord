@@ -12,10 +12,8 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
 
-    use crate::api_communication::with_big_endian;
-    use crate::{
-        start_dht, ApiPacketHeader, DhtPut, P2pDht, API_DHT_GET, API_DHT_PUT, API_DHT_SHUTDOWN,
-    };
+    use crate::api_communication;
+    use crate::P2pDht;
 
     async fn start_peers(
         amount: usize,
@@ -58,7 +56,13 @@ mod tests {
 
                     // Only start api socket if requested
                     if start_api_socket {
-                        start_dht(dht, api_listener).await.unwrap();
+                        api_communication::start_dht(
+                            dht.dht.clone(),
+                            dht.api_address,
+                            api_listener,
+                        )
+                        .await
+                        .unwrap();
                     }
                 }),
             ));
@@ -97,12 +101,14 @@ mod tests {
 
         let key = [0x1; 32];
         // Send Get Key Request
-        let header = ApiPacketHeader {
+        let header = api_communication::ApiPacketHeader {
             size: 4 + key.len() as u16,
-            message_type: API_DHT_GET,
+            message_type: api_communication::API_DHT_GET,
         };
 
-        let mut buf = with_big_endian().serialize(&header).unwrap();
+        let mut buf = api_communication::with_big_endian()
+            .serialize(&header)
+            .unwrap();
         buf.extend(key);
         stream.write_all(&buf).await.unwrap();
 
@@ -117,10 +123,10 @@ mod tests {
         assert_eq!(bytes_read, 36);
 
         // Send shutdown request
-        let buf = with_big_endian()
-            .serialize(&ApiPacketHeader {
+        let buf = api_communication::with_big_endian()
+            .serialize(&api_communication::ApiPacketHeader {
                 size: 4,
-                message_type: API_DHT_SHUTDOWN,
+                message_type: api_communication::API_DHT_SHUTDOWN,
             })
             .unwrap();
         stream.write_all(&buf).await.unwrap();
@@ -141,11 +147,11 @@ mod tests {
 
         // Send Put Key Request
         info!("Sending put");
-        let header = ApiPacketHeader {
+        let header = api_communication::ApiPacketHeader {
             size: 4 + 4 + key.len() as u16 + value.len() as u16,
-            message_type: API_DHT_PUT,
+            message_type: api_communication::API_DHT_PUT,
         };
-        let payload = DhtPut {
+        let payload = api_communication::DhtPut {
             ttl: 0,
             replication: 0,
             reserved: 0,
@@ -153,10 +159,26 @@ mod tests {
             value: value.clone(),
         };
         let mut buf = Vec::new();
-        buf.extend(with_big_endian().serialize(&header).unwrap());
-        buf.extend(with_big_endian().serialize(&payload.ttl).unwrap());
-        buf.extend(with_big_endian().serialize(&payload.replication).unwrap());
-        buf.extend(with_big_endian().serialize(&payload.reserved).unwrap());
+        buf.extend(
+            api_communication::with_big_endian()
+                .serialize(&header)
+                .unwrap(),
+        );
+        buf.extend(
+            api_communication::with_big_endian()
+                .serialize(&payload.ttl)
+                .unwrap(),
+        );
+        buf.extend(
+            api_communication::with_big_endian()
+                .serialize(&payload.replication)
+                .unwrap(),
+        );
+        buf.extend(
+            api_communication::with_big_endian()
+                .serialize(&payload.reserved)
+                .unwrap(),
+        );
         buf.extend(payload.key);
         buf.extend(payload.value);
 
@@ -169,11 +191,13 @@ mod tests {
 
         // Send Get Key Request
         info!("Sending get");
-        let header = ApiPacketHeader {
+        let header = api_communication::ApiPacketHeader {
             size: 4 + key.len() as u16,
-            message_type: API_DHT_GET,
+            message_type: api_communication::API_DHT_GET,
         };
-        let mut buf = with_big_endian().serialize(&header).unwrap();
+        let mut buf = api_communication::with_big_endian()
+            .serialize(&header)
+            .unwrap();
         buf.extend(key);
         debug!("Content of get request: {:?}", buf);
         debug!("Length of get request: {:?}", buf.len());
@@ -192,11 +216,13 @@ mod tests {
         assert_eq!(bytes_read, 39);
 
         info!("Sending close");
-        let header = ApiPacketHeader {
+        let header = api_communication::ApiPacketHeader {
             size: 4,
-            message_type: API_DHT_SHUTDOWN,
+            message_type: api_communication::API_DHT_SHUTDOWN,
         };
-        let mut buf = with_big_endian().serialize(&header).unwrap();
+        let mut buf = api_communication::with_big_endian()
+            .serialize(&header)
+            .unwrap();
         buf.extend(key);
         stream.write_all(&buf).await.unwrap();
 
@@ -213,17 +239,20 @@ mod tests {
 
         // Put Value
         let (dht, _) = &dhts[0];
-        dht.put(DhtPut {
-            ttl: 0,
-            replication: 0,
-            reserved: 0,
-            key,
-            value: value.clone(),
-        })
+        api_communication::process_api_put_request(
+            dht.dht.clone(),
+            api_communication::DhtPut {
+                ttl: 0,
+                replication: 0,
+                reserved: 0,
+                key,
+                value: value.clone(),
+            },
+        )
         .await;
 
         // Get
-        let hashed_key = P2pDht::hash_vec_bytes(&key);
+        let hashed_key = api_communication::hash_vec_bytes(&key);
         let value_back = dht.dht.get(hashed_key).await.unwrap();
 
         assert_eq!(value_back, value);
@@ -265,25 +294,31 @@ mod tests {
 
         for (key, value) in &pairs0 {
             // Put Value
-            dht0.put(DhtPut {
-                ttl: 0,
-                replication: 0,
-                reserved: 0,
-                key: *key,
-                value: value.clone(),
-            })
+            api_communication::process_api_put_request(
+                dht0.dht.clone(),
+                api_communication::DhtPut {
+                    ttl: 0,
+                    replication: 0,
+                    reserved: 0,
+                    key: *key,
+                    value: value.clone(),
+                },
+            )
             .await;
         }
 
         for (key, value) in &pairs1 {
             // Put Value
-            dht1.put(DhtPut {
-                ttl: 0,
-                replication: 0,
-                reserved: 0,
-                key: *key,
-                value: value.clone(),
-            })
+            api_communication::process_api_put_request(
+                dht1.dht.clone(),
+                api_communication::DhtPut {
+                    ttl: 0,
+                    replication: 0,
+                    reserved: 0,
+                    key: *key,
+                    value: value.clone(),
+                },
+            )
             .await;
         }
 
@@ -294,7 +329,7 @@ mod tests {
 
         for (key, value) in pairs_all {
             // Get
-            let hashed_key = P2pDht::hash_vec_bytes(&key);
+            let hashed_key = api_communication::hash_vec_bytes(&key);
 
             for dht in [dht0, dht1] {
                 match dht.dht.get(hashed_key).await {
@@ -317,7 +352,7 @@ mod tests {
         let amount_peers: usize = 10;
         let dhts = start_peers(amount_peers, false).await;
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         let pairs_size: usize = 16;
         let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
@@ -328,16 +363,17 @@ mod tests {
         for (i, pair_chunk) in pairs.chunks(pairs_size / (amount_peers - 2)).enumerate() {
             for (key, value) in pair_chunk {
                 // Put Value
-                dhts[i]
-                    .0
-                    .put(DhtPut {
+                api_communication::process_api_put_request(
+                    dhts[i].0.dht.clone(),
+                    api_communication::DhtPut {
                         ttl: 0,
                         replication: 0,
                         reserved: 0,
                         key: *key,
                         value: value.clone(),
-                    })
-                    .await;
+                    },
+                )
+                .await;
             }
         }
 
@@ -345,7 +381,7 @@ mod tests {
         print_dhts(&dhts);
         for (key, value) in pairs {
             // Get
-            let hashed_key = P2pDht::hash_vec_bytes(&key);
+            let hashed_key = api_communication::hash_vec_bytes(&key);
 
             for (dht, _) in &dhts {
                 match dht.dht.get(hashed_key).await {

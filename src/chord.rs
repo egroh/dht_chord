@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use log::{debug, info, warn};
@@ -11,9 +12,7 @@ use parking_lot::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-
-use crate::s_chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
-
+mod peer_messages;
 macro_rules! connect_to_peer {
     ($address:expr) => {{
         let stream = TcpStream::connect($address).await?;
@@ -22,6 +21,7 @@ macro_rules! connect_to_peer {
     }};
 }
 
+#[derive(Clone)]
 pub struct SChord {
     pub state: Arc<SChordState>,
 }
@@ -329,6 +329,15 @@ impl SChord {
                     break;
                 }
             }
+            // todo maybe fix this
+            /*
+                if is_between_on_ring(key, self.state.node_id, finger.id) {
+                    println!(
+                "{} - {:x} looking up node responsible for {:x}, FAILURE finger index {}, {} - {:x}",
+                self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
+            );
+                }
+                */
 
             // Assert that the key is after the node we try to contact, otherwise we might get routing loops
             debug_assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
