@@ -5,6 +5,8 @@ mod tests {
     use std::time::Duration;
 
     use bincode::Options;
+    use env_logger::Env;
+    use log::{debug, error, info};
     use serde::{Deserialize, Serialize};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
@@ -106,6 +108,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(1, true).await;
 
         let (dht, _) = &dhts[0];
@@ -142,6 +145,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(1, true).await;
 
         let (dht, _) = &dhts[0];
@@ -169,7 +173,7 @@ mod tests {
             .await
             .unwrap();
 
-        println!("Send put");
+        info!("Send put");
 
         // Send Get Key Request
         let header = ApiPacketHeader {
@@ -180,7 +184,7 @@ mod tests {
         buf.extend(key);
         stream.write_all(&buf).await.unwrap();
 
-        println!("Send get");
+        info!("Send get");
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -188,7 +192,7 @@ mod tests {
         let bytes_read = stream.read(&mut buf).await.unwrap();
         let received_data: GetResponse = bincode::deserialize(&buf[..bytes_read]).unwrap();
 
-        println!("Send close");
+        info!("Send close");
         let header = ApiPacketHeader {
             size: 4,
             message_type: API_DHT_SHUTDOWN,
@@ -203,6 +207,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_store_get() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(1, false).await;
 
         let key = [0x1; 32];
@@ -229,6 +234,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_multiple_store_get() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(2, false).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -295,7 +301,7 @@ mod tests {
             for dht in [dht0, dht1] {
                 match dht.dht.get(hashed_key).await {
                     Err(e) => {
-                        eprintln!("{:?}", e);
+                        error!("{:?}", e);
                         panic!("Value has not been found")
                     }
                     Ok(value_back) => {
@@ -309,6 +315,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_hammer_store_get() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 10;
         let dhts = start_peers(amount_peers, false).await;
 
@@ -345,7 +352,7 @@ mod tests {
             for (dht, _) in &dhts {
                 match dht.dht.get(hashed_key).await {
                     Err(e) => {
-                        eprintln!("{:?}", e);
+                        error!("{:?}", e);
                         panic!("Value has not been found")
                     }
                     Ok(value_back) => {
@@ -359,17 +366,17 @@ mod tests {
 
     fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
         for (dht, _) in dhts {
-            println!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
+            debug!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
             dht.dht.print_short();
-            println!("Stored values:");
+            debug!("Stored values:");
             for (key, value) in dht.dht.state.local_storage.clone() {
-                println!("  {:x}: {:?}", key, value);
+                debug!("  {:x}: {:?}", key, value);
             }
-            println!("Finger table:");
+            debug!("Finger table:");
             for entry in &dht.dht.state.finger_table[55..60] {
-                println!("{:?}", *entry.read());
+                debug!("{:?}", *entry.read());
             }
-            println!("---");
+            debug!("---");
         }
     }
 }

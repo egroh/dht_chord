@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use bincode::Options;
 use ini::ini;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
@@ -189,12 +190,12 @@ impl P2pDht {
                 buf.extend(value);
 
                 if let Err(e) = response_stream.lock().await.write_all(&buf).await {
-                    eprintln!("Error writing to socket: {}", e);
+                    warn!("Error writing to socket: {}", e);
                 }
             }
             Err(e) => {
                 // todo maybe remove this
-                eprintln!("{}", e);
+                warn!("{}", e);
 
                 let header = ApiPacketHeader {
                     size: 4 + get.key.len() as u16,
@@ -204,7 +205,7 @@ impl P2pDht {
                 buf.extend(get.key);
 
                 if let Err(e) = response_stream.lock().await.write_all(&buf).await {
-                    eprintln!("Error writing to socket: {}", e);
+                    warn!("Error writing to socket: {}", e);
                 }
             }
         }
@@ -262,7 +263,7 @@ async fn create_dht_from_command_line_arguments() -> Arc<P2pDht> {
 }
 
 async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Box<dyn Error>> {
-    println!("Listening for API Calls on {}", dht.api_address);
+    info!("Listening for API Calls on {}", dht.api_address);
     loop {
         let (stream, _socket_address) = api_listener.accept().await?;
         let dht = Arc::clone(&dht);
@@ -329,7 +330,7 @@ async fn start_dht(dht: Arc<P2pDht>, api_listener: TcpListener) -> Result<(), Bo
                 }
             };
             if let Err(e) = connection_result().await {
-                eprintln!("Error in API connection on port {}: {}", api_address, e)
+                warn!("Error in API connection on port {}: {}", api_address, e)
             }
         });
     }

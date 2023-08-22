@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
+use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -43,7 +44,7 @@ impl SChord {
     }
 
     pub async fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
-        println!("Starting SChord server on {}", server_address);
+        info!("Starting SChord server on {}", server_address);
         let self_clone = SChord {
             state: self.state.clone(),
         };
@@ -56,7 +57,7 @@ impl SChord {
         let handle = tokio::spawn(async move {
             // Send signal that we are running
             tx.send(true).await.expect("Unable to send message");
-            println!("SChord listening for peers on {}", server_address);
+            info!("SChord listening for peers on {}", server_address);
             loop {
                 let (stream, socket_address) = listener.accept().await.unwrap();
                 let self_clone = SChord {
@@ -69,7 +70,7 @@ impl SChord {
                         }
                         Err(e) => {
                             // todo maybe send error message to peer
-                            eprintln!("Error in connection with peer {}: {:?}", socket_address, e);
+                            warn!("Error in connection with peer {}: {:?}", socket_address, e);
                         }
                     }
                 });
@@ -81,7 +82,7 @@ impl SChord {
     }
 
     pub async fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {
-        println!("Creating new SChord node on: {}", server_address);
+        info!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
         server_address.hash(&mut hasher);
         let node_id = hasher.finish();
@@ -225,13 +226,13 @@ impl SChord {
             .await
     }
     pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
-        println!("{} API storage insert key {}", self.state.address, key);
+        debug!("{} API storage insert key {}", self.state.address, key);
         if self.is_responsible_for_key(key) {
-            println!("Storing locally!");
+            debug!("Storing locally!");
             self.internal_insert(key, value, ttl).await
         } else {
             let peer = self.get_responsible_node(key).await?;
-            println!("Storing remotely! (on {})", peer.address);
+            debug!("Storing remotely! (on {})", peer.address);
 
             let mut stream = TcpStream::connect(peer.address).await?;
             let (reader, writer) = stream.split();
@@ -250,7 +251,7 @@ impl SChord {
     }
 
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
-        println!("Retrieving key {} from {}", key, self.state.address);
+        debug!("Retrieving key {} from {}", key, self.state.address);
         if self.is_responsible_for_key(key) {
             self.state
                 .local_storage
@@ -286,7 +287,7 @@ impl SChord {
 
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         // This method should never be called when we are responsible for this key
-        assert!(!self.is_responsible_for_key(key));
+        debug_assert!(!self.is_responsible_for_key(key));
 
         // Check if successor is responsible
         let successor = *self
@@ -330,18 +331,18 @@ impl SChord {
             }
 
             // Assert that the key is after the node we try to contact, otherwise we might get routing loops
-            assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
+            debug_assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
 
             (finger, finger_index)
         };
 
-        println!(
+        debug!(
             "{} - {:x} looking up node responsible for {:x}, will now ask finger index {}, {} - {:x}",
             self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
         );
 
         // Assert that we do not try to route things to ourselves
-        assert_ne!(finger.id, self.state.node_id);
+        debug_assert_ne!(finger.id, self.state.node_id);
 
         let (mut tx, mut rx) = connect_to_peer!(finger.address);
 
@@ -379,7 +380,7 @@ impl SChord {
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
                     if self.is_responsible_for_key(id) {
-                        println!(
+                        debug!(
                             "{} - {:x} was asked for node responsible  {:x}, which is us",
                             self.state.address, self.state.node_id, id
                         );
@@ -408,7 +409,7 @@ impl SChord {
                         .await?;
                 }
                 PeerMessage::SplitRequest(new_peer) => {
-                    println!("{}: Split pred: {}", self.state.address, new_peer.address);
+                    debug!("{}: Split pred: {}", self.state.address, new_peer.address);
                     let predecessor = {
                         // Aquire write lock for predecessors
                         let mut predecessors = self.state.predecessors.write();
@@ -447,11 +448,11 @@ impl SChord {
                     }
                 }
                 PeerMessage::InsertValue(key, value, ttl) => {
-                    println!("{} asked to store {:x}", self.state.address, key);
+                    debug!("{} asked to store {:x}", self.state.address, key);
                     self.internal_insert(key, value, ttl).await?;
                 }
                 PeerMessage::SetSuccessor(successor) => {
-                    println!(
+                    debug!(
                         "{}: Set Successor: {}",
                         self.state.address, successor.address
                     );
@@ -485,14 +486,14 @@ impl SChord {
     }
 
     pub fn print_short(&self) {
-        println!(" P:{}", self.state.predecessors.read()[0].address);
-        println!(" S:{}", self.state.finger_table[0].read().address);
+        debug!(" P:{}", self.state.predecessors.read()[0].address);
+        debug!(" S:{}", self.state.finger_table[0].read().address);
     }
 
     pub fn print(&self) {
-        println!("Id {:x}: {}", self.state.node_id, self.state.address);
+        debug!("Id {:x}: {}", self.state.node_id, self.state.address);
         for predecessor in self.state.predecessors.read().iter() {
-            println!(" P {:x}: {}", predecessor.id, predecessor.address);
+            debug!(" P {:x}: {}", predecessor.id, predecessor.address);
         }
         for entry in self
             .state
@@ -501,7 +502,7 @@ impl SChord {
             .take(10)
             .map(|entry| entry.read())
         {
-            println!(" F {:x}: {}", entry.id, entry.address);
+            debug!(" F {:x}: {}", entry.id, entry.address);
         }
     }
 }
