@@ -1,87 +1,54 @@
 mod tests {
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::api_communication;
+    use crate::P2pDht;
     use bincode::Options;
     use env_logger::Env;
     use log::{debug, error, info};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
-    use tokio::sync::mpsc;
-    use tokio::task::JoinHandle;
+    use tokio::net::TcpStream;
 
-    use crate::api_communication;
-    use crate::P2pDht;
-
-    async fn start_peers(
-        amount: usize,
-        start_api_socket: bool,
-    ) -> Vec<(Arc<P2pDht>, JoinHandle<()>)> {
-        let mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)> = vec![];
+    async fn start_peers(amount: usize, start_api_socket: bool) -> Vec<P2pDht> {
+        let mut dhts: Vec<P2pDht> = vec![];
 
         static COUNTER: AtomicU32 = AtomicU32::new(1);
 
         for i in 0..amount {
             let port_counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dht = Arc::new(
-                P2pDht::new(
-                    Duration::from_secs(60),
-                    Duration::from_secs(60),
-                    format!("127.0.0.1:4{:0>4}", port_counter)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                    format!("127.0.0.1:3{:0>4}", port_counter)
-                        .parse::<SocketAddr>()
-                        .unwrap(),
-                    if i == 0 {
-                        None
-                    } else {
-                        Some(dhts[0].0.dht.get_address())
-                    },
-                )
-                .await,
-            );
+            let dht = P2pDht::new(
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+                format!("127.0.0.1:4{:0>4}", port_counter)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+                format!("127.0.0.1:3{:0>4}", port_counter)
+                    .parse::<SocketAddr>()
+                    .unwrap(),
+                if i == 0 {
+                    None
+                } else {
+                    Some(dhts[0].dht.get_address())
+                },
+                start_api_socket,
+            )
+            .await;
 
-            let api_listener = TcpListener::bind(dht.api_address).await.unwrap();
-            // Open channel for inter thread communication
-            let (tx, mut rx) = mpsc::channel(1);
-
-            dhts.push((
-                dht.clone(),
-                tokio::spawn(async move {
-                    // Send signal that we are running
-                    tx.send(true).await.expect("Unable to send message");
-
-                    // Only start api socket if requested
-                    if start_api_socket {
-                        api_communication::start_dht(
-                            dht.dht.clone(),
-                            dht.api_address,
-                            api_listener,
-                        )
-                        .await
-                        .unwrap();
-                    }
-                }),
-            ));
-            // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
-            rx.recv().await.unwrap();
+            dhts.push(dht);
         }
 
         dhts
     }
 
-    async fn stop_dhts(mut dhts: Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
-        for (_, handle) in dhts.iter() {
-            handle.abort();
+    async fn stop_dhts(mut dhts: Vec<P2pDht>) {
+        for dht in dhts.iter() {
+            dht.initiate_shutdown();
         }
 
-        // Iterate over all entrys and take ownership over the handles to terminate them
-        while let Some((_dht, handle)) = dhts.drain(..).next() {
-            // Wait for handles to join and ignore all errors
-            let _ = handle.await;
+        while let Some(mut dht) = dhts.drain(..).next() {
+            dht.await_termination().await;
         }
     }
 
@@ -96,7 +63,7 @@ mod tests {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(1, true).await;
 
-        let (dht, _) = &dhts[0];
+        let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
         let key = [0x1; 32];
@@ -139,7 +106,7 @@ mod tests {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let dhts = start_peers(1, true).await;
 
-        let (dht, _) = &dhts[0];
+        let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
 
         let key = [0x1; 32];
@@ -238,7 +205,7 @@ mod tests {
         let value = vec![0x1, 0x2, 0x3];
 
         // Put Value
-        let (dht, _) = &dhts[0];
+        let dht = &dhts[0];
         api_communication::process_api_put_request(
             dht.dht.clone(),
             api_communication::DhtPut {
@@ -268,8 +235,8 @@ mod tests {
 
         print_dhts(&dhts);
 
-        let (dht0, _) = &dhts[0];
-        let (dht1, _) = &dhts[1];
+        let dht0 = &dhts[0];
+        let dht1 = &dhts[1];
 
         let pairs0 = [
             ([0x01; 32], vec![0x01]),
@@ -364,7 +331,7 @@ mod tests {
             for (key, value) in pair_chunk {
                 // Put Value
                 api_communication::process_api_put_request(
-                    dhts[i].0.dht.clone(),
+                    dhts[i].dht.clone(),
                     api_communication::DhtPut {
                         ttl: 0,
                         replication: 0,
@@ -383,7 +350,7 @@ mod tests {
             // Get
             let hashed_key = api_communication::hash_vec_bytes(&key);
 
-            for (dht, _) in &dhts {
+            for dht in &dhts {
                 match dht.dht.get(hashed_key).await {
                     Err(e) => {
                         error!("{:?}", e);
@@ -398,8 +365,8 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
-    fn print_dhts(dhts: &Vec<(Arc<P2pDht>, JoinHandle<()>)>) {
-        for (dht, _) in dhts {
+    fn print_dhts(dhts: &Vec<P2pDht>) {
+        for dht in dhts {
             debug!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
             dht.dht.print_short();
             debug!("Stored values:");

@@ -8,13 +8,15 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use crate::chord::SChord;
-use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const API_DHT_PUT: u16 = 650;
 pub const API_DHT_GET: u16 = 651;
@@ -187,85 +189,115 @@ async fn process_api_get_request(
         }
     }
 }
-pub async fn start_dht(
+pub async fn start_api_server(
     dht: SChord,
     api_address: SocketAddr,
-    api_listener: TcpListener,
-) -> Result<(), Box<dyn Error>> {
+    cancellation_token: CancellationToken,
+) -> JoinHandle<()> {
+    let api_listener = TcpListener::bind(api_address)
+        .await
+        .expect("Failed to bind API server socket");
+
+    // Open channel for inter thread communication
+    let (thread_start_tx, mut thread_start_rx) = mpsc::channel(1);
+
     info!("Listening for API Calls on {}", api_address);
-    loop {
-        let (stream, socket_address) = api_listener.accept().await?;
-        debug!("New API connection from: {}", socket_address);
-        let (mut reader, writer) = stream.into_split();
-        let writer = Arc::new(Mutex::new(writer));
+    let handle = tokio::spawn(async move {
+        // Send signal that we are running
+        thread_start_tx
+            .send(true)
+            .await
+            .expect("Unable to send message");
 
-        let dht = dht.clone();
+        loop {
+            tokio::select! {
+                result = api_listener.accept() => {
+                    if let Ok((stream, _)) = result {
 
-        tokio::spawn(async move {
-            let connection_result = async move || -> Result<(), Box<dyn Error>> {
-                let mut buf = [0; 1024];
+                    let (mut reader, writer) = stream.into_split();
+                    let writer = Arc::new(Mutex::new(writer));
 
-                let mut header_bytes = Vec::new();
-                let mut packet: ApiPacket = ApiPacket::default();
+                    let dht = dht.clone();
 
-                // Read data from socket
-                loop {
-                    let n = match reader.read(&mut buf).await {
-                        // socket closed
-                        Ok(n) if n == 0 => return Ok(()),
-                        Ok(n) => n,
-                        Err(e) => return Err(e.into()),
-                    };
-                    for byte in &buf[0..n] {
-                        if header_bytes.len() < 4 {
-                            header_bytes.push(*byte);
-                            if header_bytes.len() == 4 {
-                                if let Ok(header_success) =
-                                    with_big_endian().deserialize(&header_bytes)
-                                {
-                                    debug!("Deserialized header: {:?}", header_success);
-                                    packet.header = header_success;
-                                } else {
-                                    return Err("Could not deserialize header".into());
+                    tokio::spawn(async move {
+                        let connection_result = async move || -> Result<(), Box<dyn Error>> {
+                            let mut buf = [0; 1024];
+
+                            let mut header_bytes = Vec::new();
+                            let mut packet: ApiPacket = ApiPacket::default();
+
+                            // Read data from socket
+                            loop {
+                                let n = match reader.read(&mut buf).await {
+                                    // socket closed
+                                    Ok(n) if n == 0 => return Ok(()),
+                                    Ok(n) => n,
+                                    Err(e) => return Err(e.into()),
+                                };
+                                for byte in &buf[0..n] {
+                                    if header_bytes.len() < 4 {
+                                        header_bytes.push(*byte);
+                                        if header_bytes.len() == 4 {
+                                            if let Ok(header_success) =
+                                                with_big_endian().deserialize(&header_bytes)
+                                            {
+                                                debug!("Deserialized header: {:?}", header_success);
+                                                packet.header = header_success;
+                                            } else {
+                                                return Err("Could not deserialize header".into());
+                                            }
+                                        }
+                                    } else {
+                                        packet.parse(*byte)?;
+                                        match packet.message {
+                                            ApiPacketMessage::Put(p) => {
+                                                debug!("Received put request: {:?}", p);
+                                                let dht = dht.clone();
+                                                tokio::spawn(async move {
+                                                    process_api_put_request(dht, p).await;
+                                                });
+                                                header_bytes.clear();
+                                                packet = ApiPacket::default();
+                                            }
+                                            ApiPacketMessage::Get(g) => {
+                                                debug!("Received get request: {:?}", g);
+                                                let writer = writer.clone();
+                                                let dht = dht.clone();
+                                                tokio::spawn(async move {
+                                                    process_api_get_request(dht, &g, &writer).await;
+                                                });
+                                                header_bytes.clear();
+                                                packet = ApiPacket::default();
+                                            }
+                                            ApiPacketMessage::Shutdown => {
+                                                debug!("Received shutdown request!");
+                                                // todo: shutdown dht server
+                                                return Ok(());
+                                            }
+                                            ApiPacketMessage::Unparsed(_) => {}
+                                            _ => return Err("Unknown api package received".into()),
+                                        }
+                                    }
                                 }
                             }
-                        } else {
-                            packet.parse(*byte)?;
-                            match packet.message {
-                                ApiPacketMessage::Put(p) => {
-                                    debug!("Received put request: {:?}", p);
-                                    let dht = dht.clone();
-                                    tokio::spawn(async move {
-                                        process_api_put_request(dht, p).await;
-                                    });
-                                    header_bytes.clear();
-                                    packet = ApiPacket::default();
-                                }
-                                ApiPacketMessage::Get(g) => {
-                                    debug!("Received get request: {:?}", g);
-                                    let writer = writer.clone();
-                                    let dht = dht.clone();
-                                    tokio::spawn(async move {
-                                        process_api_get_request(dht, &g, &writer).await;
-                                    });
-                                    header_bytes.clear();
-                                    packet = ApiPacket::default();
-                                }
-                                ApiPacketMessage::Shutdown => {
-                                    debug!("Received shutdown request!");
-                                    // todo: shutdown dht server
-                                    return Ok(());
-                                }
-                                ApiPacketMessage::Unparsed(_) => {}
-                                _ => return Err("Unknown api package received".into()),
-                            }
+                        };
+                        if let Err(e) = connection_result().await {
+                            warn!("Error in API connection on port {}: {}", api_address, e)
                         }
+                    });
+                            } else {
+                        // todo maybe do something
                     }
                 }
-            };
-            if let Err(e) = connection_result().await {
-                warn!("Error in API connection on port {}: {}", api_address, e)
+                _ = cancellation_token.cancelled() => {
+                    info!("{}: Stopped accepting new api connections.", api_address);
+                    break;
+                }
             }
-        });
-    }
+        }
+    });
+    // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
+    thread_start_rx.recv().await.unwrap();
+
+    handle
 }

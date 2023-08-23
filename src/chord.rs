@@ -12,6 +12,8 @@ use parking_lot::RwLock;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
 mod peer_messages;
 macro_rules! connect_to_peer {
     ($address:expr) => {{
@@ -43,7 +45,11 @@ impl SChord {
         self.state.address
     }
 
-    pub async fn start_server_socket(&self, server_address: SocketAddr) -> JoinHandle<()> {
+    pub async fn start_server_socket(
+        &self,
+        server_address: SocketAddr,
+        cancellation_token: CancellationToken,
+    ) -> JoinHandle<()> {
         info!("Starting SChord server on {}", server_address);
         let self_clone = SChord {
             state: self.state.clone(),
@@ -59,21 +65,29 @@ impl SChord {
             tx.send(true).await.expect("Unable to send message");
             info!("SChord listening for peers on {}", server_address);
             loop {
-                let (stream, socket_address) = listener.accept().await.unwrap();
-                let self_clone = SChord {
-                    state: self_clone.state.clone(),
-                };
-                tokio::spawn(async move {
-                    match self_clone.accept_peer_connection(stream).await {
-                        Ok(_) => {
-                            // Everything fine, no need to do anything
+                tokio::select! {
+                    result = listener.accept() => {
+                    let (stream, _) = result.unwrap();
+                    let self_clone = SChord {
+                        state: self_clone.state.clone(),
+                    };
+                    tokio::spawn(async move {
+                        match self_clone.accept_peer_connection(stream).await {
+                            Ok(_) => {
+                                // Everything fine, no need to do anything
+                            }
+                            Err(e) => {
+                                // todo maybe send error message to peer
+                                warn!("Error in connection {:?}", e);
+                            }
                         }
-                        Err(e) => {
-                            // todo maybe send error message to peer
-                            warn!("Error in connection with peer {}: {:?}", socket_address, e);
-                        }
+                    });
                     }
-                });
+                    _ = cancellation_token.cancelled() => {
+                        info!("{}: Stopped accepting new peer connections.", server_address);
+                        break;
+                    }
+                }
             }
         });
         // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
