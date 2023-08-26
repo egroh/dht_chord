@@ -3,13 +3,14 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
-    use crate::api_communication;
-    use crate::P2pDht;
     use bincode::Options;
     use env_logger::Env;
     use log::{debug, error, info};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
+
+    use crate::api_communication;
+    use crate::P2pDht;
 
     async fn start_peers(amount: usize, start_api_socket: bool) -> Vec<P2pDht> {
         let mut dhts: Vec<P2pDht> = vec![];

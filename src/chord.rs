@@ -4,15 +4,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::chord::peer_messages::{ChordPeer, PeerMessage, SplitResponse};
 use anyhow::{anyhow, Result};
+use channels::serdes::Bincode;
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use parking_lot::RwLock;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use crate::chord::peer_messages::{ChordPeer, PeerMessage, ProofOfWorkChallenge, SplitResponse};
 
 mod peer_messages;
 macro_rules! connect_to_peer {
@@ -110,6 +113,7 @@ impl SChord {
                 // this node is automatically our successor
                 // this works because no node is aware of our existence yet
                 tx.send(PeerMessage::GetNode(node_id)).await?;
+                solve_proof_of_work(&mut tx, &mut rx).await?;
                 match rx.recv().await? {
                     PeerMessage::GetNodeResponse(mut successor) => {
                         // Close connection to initial peer
@@ -123,6 +127,7 @@ impl SChord {
                         loop {
                             // Ask predecessor
                             tx.send(PeerMessage::GetPredecessor).await?;
+                            solve_proof_of_work(&mut tx, &mut rx).await?;
                             match rx.recv().await? {
                                 PeerMessage::GetPredecessorResponse(predecessor) => {
                                     // initialize our predecessor
@@ -141,6 +146,7 @@ impl SChord {
                                 address: server_address,
                             }))
                             .await?;
+                            solve_proof_of_work(&mut tx, &mut rx).await?;
                             match rx.recv().await? {
                                 PeerMessage::SplitResponse(SplitResponse::Success(new_keys)) => {
                                     for (key, value) in new_keys {
@@ -148,14 +154,15 @@ impl SChord {
                                     }
 
                                     // Inform predecessor that we are his successor now
-                                    // todo maybe fix race condition that predecessor may expect us to asnwer queries but server socket is not yet started
-                                    let (mut pre_tx, _) = connect_to_peer!(predecessors[0].address);
-                                    pre_tx
-                                        .send(PeerMessage::SetSuccessor(ChordPeer {
-                                            id: node_id,
-                                            address: server_address,
-                                        }))
-                                        .await?;
+                                    // todo maybe fix race condition that predecessor may expect us to answer queries but server socket is not yet started
+                                    let (mut tx, mut rx) =
+                                        connect_to_peer!(predecessors[0].address);
+                                    tx.send(PeerMessage::SetSuccessor(ChordPeer {
+                                        id: node_id,
+                                        address: server_address,
+                                    }))
+                                    .await?;
+                                    solve_proof_of_work(&mut tx, &mut rx).await?;
 
                                     // todo maybe await response?
 
@@ -247,12 +254,9 @@ impl SChord {
         } else {
             let peer = self.get_responsible_node(key).await?;
             debug!("Storing remotely! (on {})", peer.address);
-
-            let mut stream = TcpStream::connect(peer.address).await?;
-            let (reader, writer) = stream.split();
-            let (mut tx, _) = channels::channel(reader, writer);
-
+            let (mut tx, mut rx) = connect_to_peer!(peer.address);
             tx.send(PeerMessage::InsertValue(key, value, ttl)).await?;
+            solve_proof_of_work(&mut tx, &mut rx).await?;
             tx.send(PeerMessage::CloseConnection).await?;
             Ok(())
         }
@@ -281,6 +285,7 @@ impl SChord {
             let (mut tx, mut rx) = connect_to_peer!(peer.address);
 
             tx.send(PeerMessage::GetValue(key)).await?;
+            solve_proof_of_work(&mut tx, &mut rx).await?;
             match rx.recv().await? {
                 PeerMessage::GetValueResponse(option) => {
                     tx.send(PeerMessage::CloseConnection).await?;
@@ -366,6 +371,7 @@ impl SChord {
         // contact finger and ask for responsible node
         // finger will recursively find out responsible node
         tx.send(PeerMessage::GetNode(key)).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
         match rx.recv().await? {
             PeerMessage::GetNodeResponse(peer) => {
                 tx.send(PeerMessage::CloseConnection).await?;
@@ -406,9 +412,10 @@ impl SChord {
                             debug!("{}: Predecessor does not know us", self.state.address);
                             // Send predecessor that we are his successor
 
-                            let (mut tx, _rx) = connect_to_peer!(predecessor.address);
+                            let (mut tx, mut rx) = connect_to_peer!(predecessor.address);
                             tx.send(PeerMessage::SetSuccessor(self.as_chord_peer()))
                                 .await?;
+                            solve_proof_of_work(&mut tx, &mut rx).await?;
                             tx.send(PeerMessage::CloseConnection).await?;
                         }
                     }
@@ -436,6 +443,7 @@ impl SChord {
             let (mut tx, mut rx) = connect_to_peer!(some_predecessor.address);
             // Ask the selected predecessor for its predecessor
             tx.send(PeerMessage::GetPredecessor).await?;
+            solve_proof_of_work(&mut tx, &mut rx).await?;
             match rx.recv().await? {
                 PeerMessage::GetPredecessorResponse(preceding_predecessor) => {
                     tx.send(PeerMessage::CloseConnection).await?;
@@ -461,6 +469,7 @@ impl SChord {
         let (mut tx, mut rx) = connect_to_peer!(self.state.finger_table[0].read().address);
         // Ask the selected predecessor for its predecessor
         tx.send(PeerMessage::GetPredecessor).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
         match rx.recv().await? {
             PeerMessage::GetPredecessorResponse(supposed_predecessor) => {
                 if supposed_predecessor.address == self.state.address {
@@ -469,6 +478,7 @@ impl SChord {
                     // Send our successor that we are his predecessor
                     tx.send(PeerMessage::SetPredecessor(self.as_chord_peer()))
                         .await?;
+                    solve_proof_of_work(&mut tx, &mut rx).await?;
                 }
 
                 tx.send(PeerMessage::CloseConnection).await?;
@@ -492,6 +502,7 @@ impl SChord {
             let (mut tx, mut rx) = connect_to_peer!(finger.address);
             // Ask the finger, for the next finger
             tx.send(PeerMessage::GetNode(next_finger)).await?;
+            solve_proof_of_work(&mut tx, &mut rx).await?;
 
             debug!(
                 "{} Stabilizing finger {} add {:x} to id {:x}",
@@ -528,6 +539,7 @@ impl SChord {
         // Add one to the id we ask for, as the successor is responsible for this key
         tx.send(PeerMessage::GetNode(node_to_ask.id.wrapping_add(1)))
             .await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
         match rx.recv().await? {
             PeerMessage::GetNodeResponse(peer) => {
                 tx.send(PeerMessage::CloseConnection).await?;
@@ -560,6 +572,7 @@ impl SChord {
         loop {
             match rx.recv().await? {
                 PeerMessage::GetNode(id) => {
+                    require_proof_of_work(&mut tx, &mut rx, 1).await?;
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
                     if self.is_responsible_for_key(id) {
@@ -579,6 +592,7 @@ impl SChord {
                     }
                 }
                 PeerMessage::GetValue(key) => {
+                    require_proof_of_work(&mut tx, &mut rx, 1).await?;
                     let value = self
                         .state
                         .local_storage
@@ -587,11 +601,13 @@ impl SChord {
                     tx.send(PeerMessage::GetValueResponse(value)).await?;
                 }
                 PeerMessage::GetPredecessor => {
+                    require_proof_of_work(&mut tx, &mut rx, 1).await?;
                     let predecessor = self.get_predecessor();
                     tx.send(PeerMessage::GetPredecessorResponse(predecessor))
                         .await?;
                 }
                 PeerMessage::SplitRequest(new_peer) => {
+                    require_proof_of_work(&mut tx, &mut rx, 2).await?;
                     debug!("{}: Split pred: {}", self.state.address, new_peer.address);
                     let predecessor = {
                         // Aquire write lock for predecessors
@@ -653,10 +669,12 @@ impl SChord {
                     }
                 }
                 PeerMessage::InsertValue(key, value, ttl) => {
+                    require_proof_of_work(&mut tx, &mut rx, 2).await?;
                     debug!("{} asked to store {:x}", self.state.address, key);
                     self.internal_insert(key, value, ttl).await?;
                 }
                 PeerMessage::SetSuccessor(successor) => {
+                    require_proof_of_work(&mut tx, &mut rx, 2).await?;
                     debug!(
                         "{}: Set Successor: {}",
                         self.state.address, successor.address
@@ -673,7 +691,7 @@ impl SChord {
                             *entry.write() = successor;
                         } else {
                             // Assert that we updated at least one entry, otherwise something is wrong
-                            assert_ne!(i, 0);
+                            debug_assert_ne!(i, 0);
                             break;
                         }
                     }
@@ -682,6 +700,7 @@ impl SChord {
                     return Ok(());
                 }
                 PeerMessage::SetPredecessor(supposed_predecessor) => {
+                    require_proof_of_work(&mut tx, &mut rx, 2).await?;
                     debug!(
                         "{}: Set Predecessor: {}",
                         self.state.address, supposed_predecessor.address
@@ -762,6 +781,52 @@ fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
         // Wrap-around case
         value >= lower || value <= upper
     }
+}
+
+async fn require_proof_of_work<'a>(
+    tx: &mut channels::Sender<PeerMessage, WriteHalf<'a>, Bincode>,
+    rx: &mut channels::Receiver<PeerMessage, ReadHalf<'a>, Bincode>,
+    difficulty: usize,
+) -> Result<()> {
+    let challenge = ProofOfWorkChallenge::new(difficulty);
+    tx.send(PeerMessage::ProofOfWorkChallenge(challenge))
+        .await?;
+    debug!(
+        "Sending proof of work challenge of difficulty {} to {}",
+        difficulty,
+        tx.get().peer_addr()?
+    );
+    if let PeerMessage::ProofOfWorkResponse(r) = rx.recv().await? {
+        return if challenge.check(r) {
+            Ok(())
+        } else {
+            Err(anyhow!("Invalid proof of work"))
+        };
+    }
+    Err(anyhow!("Invalid response to proof of work challenge"))
+}
+
+async fn solve_proof_of_work(
+    tx: &mut channels::Sender<PeerMessage, OwnedWriteHalf, Bincode>,
+    rx: &mut channels::Receiver<PeerMessage, OwnedReadHalf, Bincode>,
+) -> Result<()> {
+    let challenge = match rx.recv().await? {
+        PeerMessage::ProofOfWorkChallenge(challenge) => challenge,
+        _ => return Err(anyhow!("Invalid message")),
+    };
+    debug!(
+        "Received proof of work challenge of difficulty {} from {}",
+        challenge.difficulty,
+        rx.get().peer_addr()?
+    );
+    let response = challenge.solve();
+    debug!(
+        "Solved proof of work challenge of difficulty {} from {}",
+        challenge.difficulty,
+        rx.get().peer_addr()?
+    );
+    tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
+    Ok(())
 }
 
 #[test]

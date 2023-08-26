@@ -1,22 +1,23 @@
-use bincode::config::{BigEndian, FixintEncoding, WithOtherEndian, WithOtherIntEncoding};
-use bincode::{DefaultOptions, Options};
-use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+use bincode::config::{BigEndian, FixintEncoding, WithOtherEndian, WithOtherIntEncoding};
+use bincode::{DefaultOptions, Options};
+use log::{debug, info, warn};
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::sync::{mpsc, Mutex};
-
-use crate::chord::SChord;
 use tokio::net::TcpListener;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use crate::chord::SChord;
 
 pub(crate) const API_DHT_PUT: u16 = 650;
 pub const API_DHT_GET: u16 = 651;
@@ -286,7 +287,7 @@ pub async fn start_api_server(
                         }
                     });
                     } else {
-                        // todo maybe do something
+                        // todo: housekeeping thread
                     }
                 }
                 _ = cancellation_token.cancelled() => {
