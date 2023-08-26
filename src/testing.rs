@@ -294,22 +294,7 @@ mod tests {
 
         let pairs_all = [pairs0, pairs1].concat();
 
-        for (key, value) in pairs_all {
-            // Get
-            let hashed_key = api_communication::hash_vec_bytes(&key);
-
-            for dht in [dht0, dht1] {
-                match dht.dht.get(hashed_key).await {
-                    Err(e) => {
-                        error!("{:?}", e);
-                        panic!("Value has not been found")
-                    }
-                    Ok(value_back) => {
-                        assert_eq!(value_back, value);
-                    }
-                }
-            }
-        }
+        check_all_keys(&dhts, pairs_all).await;
         stop_dhts(dhts).await;
     }
 
@@ -346,11 +331,73 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(20)).await;
         print_dhts(&dhts);
-        for (key, value) in pairs {
+
+        check_all_keys(&dhts, pairs).await;
+
+        stop_dhts(dhts).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_stabilize() {
+        let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
+        let amount_peers: usize = 4;
+        let dhts = start_peers(amount_peers, false).await;
+
+        //dhts[0].initiate_shutdown();
+        // dhts[1].initiate_shutdown();
+        stabilize_all(&dhts).await;
+
+        // todo test disconnected node
+        // dhts[0].initiate_shutdown();
+        // stabilize_all(&dhts).await;
+
+        let pairs_size: usize = 16;
+        let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
+        for i in 0..pairs_size {
+            pairs.push(([i as u8; 32], vec![i as u8]));
+        }
+
+        for (i, pair_chunk) in pairs.chunks(pairs_size / (amount_peers - 2)).enumerate() {
+            for (key, value) in pair_chunk {
+                // Put Value
+                api_communication::process_api_put_request(
+                    dhts[i].dht.clone(),
+                    api_communication::DhtPut {
+                        ttl: 0,
+                        replication: 0,
+                        reserved: 0,
+                        key: *key,
+                        value: value.clone(),
+                    },
+                )
+                .await;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        print_dhts(&dhts);
+
+        check_all_keys(&dhts, pairs).await;
+
+        stop_dhts(dhts).await;
+    }
+
+    async fn stabilize_all(dhts: &Vec<P2pDht>) {
+        for wrapper in dhts {
+            wrapper
+                .dht
+                .stabilize()
+                .await
+                .expect("Stabilize resulted in an unexpected error");
+        }
+    }
+
+    async fn check_all_keys(dhts: &Vec<P2pDht>, original_pairs: Vec<([u8; 32], Vec<u8>)>) {
+        for (key, value) in original_pairs {
             // Get
             let hashed_key = api_communication::hash_vec_bytes(&key);
 
-            for dht in &dhts {
+            for dht in dhts {
                 match dht.dht.get(hashed_key).await {
                     Err(e) => {
                         error!("{:?}", e);
@@ -362,9 +409,7 @@ mod tests {
                 }
             }
         }
-        stop_dhts(dhts).await;
     }
-
     fn print_dhts(dhts: &Vec<P2pDht>) {
         for dht in dhts {
             debug!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);

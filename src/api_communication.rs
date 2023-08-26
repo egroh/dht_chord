@@ -99,7 +99,7 @@ impl ApiPacket {
                         let ttl = u16::from_be_bytes([v[0], v[1]]);
                         let replication = v[2];
                         let reserved = v[3];
-                        let mut key = &v[4..36];
+                        let key = &v[4..36];
                         let value = v[36..].to_vec();
                         debug_assert!(value.len() == self.header.size as usize - 40);
                         self.message = ApiPacketMessage::Put(DhtPut {
@@ -285,7 +285,7 @@ pub async fn start_api_server(
                             warn!("Error in API connection on port {}: {}", api_address, e)
                         }
                     });
-                            } else {
+                    } else {
                         // todo maybe do something
                     }
                 }
