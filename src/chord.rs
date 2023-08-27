@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use channels::serdes::Bincode;
 use dashmap::DashMap;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -922,6 +922,11 @@ async fn require_proof_of_work<'a>(
     let challenge = ProofOfWorkChallenge::new(difficulty);
     tx.send(PeerMessage::ProofOfWorkChallenge(challenge))
         .await?;
+    trace!(
+        "Sending proof of work challenge of difficulty {} to {}",
+        difficulty,
+        tx.get().peer_addr()?
+    );
     if let PeerMessage::ProofOfWorkResponse(r) = rx.recv().await? {
         return if challenge.check(r) {
             Ok(())
@@ -940,7 +945,17 @@ async fn solve_proof_of_work(
         PeerMessage::ProofOfWorkChallenge(challenge) => challenge,
         _ => return Err(anyhow!("Invalid message")),
     };
+    trace!(
+        "Received proof of work challenge of difficulty {} from {}",
+        challenge.difficulty,
+        rx.get().peer_addr()?
+    );
     let response = challenge.solve();
+    trace!(
+        "Solved proof of work challenge of difficulty {} from {}",
+        challenge.difficulty,
+        rx.get().peer_addr()?
+    );
     tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
     Ok(())
 }
