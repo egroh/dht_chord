@@ -319,65 +319,82 @@ impl SChord {
         // If successor is responsible, we return our successor
         // This is required, as otherwise we will not consider routing to our successor,
         // since he is not before the key (since we are the node before the key)
-        let (finger, finger_index) = if is_between_on_ring(key, self.state.node_id, successor.id) {
-            // Assert that we do not try to route things to ourselves
-            debug_assert_ne!(successor.id, self.state.node_id);
-            (successor, 99)
-        } else {
-            // Default to largest finger, this is the case if no finger is between ourselves and the key
-            // Save largest finger before checking for smaller, as the last entry might be
-            // modified to be after our key while checking
-            let mut finger = *self
-                .state
-                .finger_table
-                .last()
-                .ok_or(anyhow!("Last entry in finger table does not exist"))?
-                .read();
-            let mut finger_index = 100;
+        let (mut finger, mut finger_index) =
+            if is_between_on_ring(key, self.state.node_id, successor.id) {
+                // Assert that we do not try to route things to ourselves
+                debug_assert_ne!(successor.id, self.state.node_id);
+                (successor, 99)
+            } else {
+                // Default to largest finger, this is the case if no finger is between ourselves and the key
+                // Save largest finger before checking for smaller, as the last entry might be
+                // modified to be after our key while checking
+                let mut finger = *self
+                    .state
+                    .finger_table
+                    .last()
+                    .ok_or(anyhow!("Last entry in finger table does not exist"))?
+                    .read();
+                let mut finger_index = 100;
 
-            // Find the peer with the largest distance from us which is between the key and us
-            // This ensures that the responsible node is after the node which we attempt to contact
-            // Otherwise we might build a routing loop since we "skipped" the actual responsible node
-            for (finger_table_index, value) in self.state.finger_table.iter().rev().enumerate() {
-                // Copy finger, since other threads might attempt to change it
-                // It does not matter if this finger is outdated, as this does not impact functionality
-                let finger_iter = *value.read();
+                // Find the peer with the largest distance from us which is between the key and us
+                // This ensures that the responsible node is after the node which we attempt to contact
+                // Otherwise we might build a routing loop since we "skipped" the actual responsible node
+                for (finger_table_index, value) in self.state.finger_table.iter().rev().enumerate()
+                {
+                    // Copy finger, since other threads might attempt to change it
+                    // It does not matter if this finger is outdated, as this does not impact functionality
+                    let finger_iter = *value.read();
 
-                // Check if finger is between key and us, so responsible node is after the finger
-                if is_between_on_ring(finger_iter.id, self.state.node_id, key) {
-                    finger = finger_iter;
-                    // Index is reversed because we iterate in reverse
-                    finger_index = 64 - finger_table_index;
-                    break;
+                    // Check if finger is between key and us, so responsible node is after the finger
+                    if is_between_on_ring(finger_iter.id, self.state.node_id, key) {
+                        finger = finger_iter;
+                        // Index is reversed because we iterate in reverse
+                        finger_index = 64 - finger_table_index;
+                        break;
+                    }
                 }
-            }
 
-            // Assert that we do not try to route things to ourselves
-            debug_assert_ne!(finger.id, self.state.node_id);
+                // Assert that we do not try to route things to ourselves
+                debug_assert_ne!(finger.id, self.state.node_id);
 
-            // Assert that the key is after the node we try to contact, otherwise we might get routing loops
-            debug_assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
+                // Assert that the key is after the node we try to contact, otherwise we might get routing loops
+                debug_assert!(!is_between_on_ring(key, self.state.node_id, finger.id));
 
-            (finger, finger_index)
-        };
+                (finger, finger_index)
+            };
 
         debug!(
             "{} - {:x} looking up node responsible for {:x}, will now ask finger index {}, {} - {:x}",
             self.state.address, self.state.node_id, key, finger_index, finger.address, finger.id,
         );
 
-        let (mut tx, mut rx) = connect_to_peer!(finger.address);
+        loop {
+            let stream = TcpStream::connect(finger.address).await;
+            match stream {
+                Ok(stream) => {
+                    let (reader, writer) = stream.into_split();
+                    let (mut tx, mut rx) = channels::channel(reader, writer);
 
-        // contact finger and ask for responsible node
-        // finger will recursively find out responsible node
-        tx.send(PeerMessage::GetNode(key)).await?;
-        solve_proof_of_work(&mut tx, &mut rx).await?;
-        match rx.recv().await? {
-            PeerMessage::GetNodeResponse(peer) => {
-                tx.send(PeerMessage::CloseConnection).await?;
-                Ok(peer)
+                    // contact finger and ask for responsible node
+                    // finger will recursively find out responsible node
+                    tx.send(PeerMessage::GetNode(key)).await?;
+                    solve_proof_of_work(&mut tx, &mut rx).await?;
+                    match rx.recv().await? {
+                        PeerMessage::GetNodeResponse(peer) => {
+                            tx.send(PeerMessage::CloseConnection).await?;
+                            return Ok(peer);
+                        }
+                        _ => return Err(anyhow!("Wrong response")),
+                    }
+                }
+                Err(e) => {
+                    debug!("Cant connect to finger {}", e);
+                    assert!(finger_index < self.state.finger_table.len());
+                    assert!(finger_index > 0);
+                    finger = *self.state.finger_table[finger_index - 1].read();
+                    finger_index -= 1;
+                }
             }
-            _ => Err(anyhow!("Wrong response")),
         }
     }
 
@@ -438,61 +455,73 @@ impl SChord {
         assert!(!self.state.predecessors.read().is_empty());
         // Add backup predecessors
         for i in 0..3 {
-            let some_predecessor = self.state.predecessors.read()[i];
-
-            let (mut tx, mut rx) = connect_to_peer!(some_predecessor.address);
-            // Ask the selected predecessor for its predecessor
-            tx.send(PeerMessage::GetPredecessor).await?;
-            solve_proof_of_work(&mut tx, &mut rx).await?;
-            match rx.recv().await? {
-                PeerMessage::GetPredecessorResponse(preceding_predecessor) => {
-                    tx.send(PeerMessage::CloseConnection).await?;
-
-                    // Insert predecessor into list, if the predecessors before fail
-                    let mut write_predecessors = self.state.predecessors.write();
-                    if write_predecessors.len() > i + 1
-                        && write_predecessors[i + 1].address != preceding_predecessor.address
-                    {
-                        write_predecessors.insert(i + 1, preceding_predecessor);
-                    } else {
-                        write_predecessors.push(preceding_predecessor);
-                    }
+            match self.stabilize_predecessor(i).await {
+                Ok(_) => {
+                    // Do nothing, method already did everything
                 }
-                _ => {
-                    tx.send(PeerMessage::CloseConnection).await?;
-                    return Err(anyhow!("Node answered unexpected message"));
+                Err(e) => {
+                    debug!("Encountered problem when contacting predecessor, assuming its no longer with us");
+
+                    self.state.predecessors.write().remove(i);
+
+                    // Abort loop, as we have to wait for the peer to stabilize itself and provide us with a contactable predecessor
+                    break;
                 }
             }
         }
 
         // Fix Successors
-        let (mut tx, mut rx) = connect_to_peer!(self.state.finger_table[0].read().address);
-        // Ask the selected predecessor for its predecessor
-        tx.send(PeerMessage::GetPredecessor).await?;
-        solve_proof_of_work(&mut tx, &mut rx).await?;
-        match rx.recv().await? {
-            PeerMessage::GetPredecessorResponse(supposed_predecessor) => {
-                if supposed_predecessor.address == self.state.address {
-                    // Everything fine, we are the predecessor of our successor
-                } else {
-                    // Send our successor that we are his predecessor
-                    tx.send(PeerMessage::SetPredecessor(self.as_chord_peer()))
-                        .await?;
-                    solve_proof_of_work(&mut tx, &mut rx).await?;
-                }
+        let mut previous_finger = None;
+        for i in 0..self.state.finger_table.len() {
+            let current_finger = *self.state.finger_table[i].read();
 
-                tx.send(PeerMessage::CloseConnection).await?;
+            match previous_finger {
+                None => previous_finger = Some(current_finger),
+                Some(previous_finger) => {
+                    if previous_finger.address == current_finger.address {
+                        // We already contacted this finger, so we skip it
+                        continue;
+                    }
+                }
             }
-            _ => {
-                tx.send(PeerMessage::CloseConnection).await?;
-                return Err(anyhow!("Node answered unexpected message"));
+
+            // Contact finger, trying to establish a correct successor
+            match self.stabilize_successor(current_finger).await {
+                Ok(successor) => {
+                    if successor.address == self.state.address {
+                        // Nothing to do, successor is alive and knows about us
+                        break;
+                    }
+
+                    // Fix all previous entries of the finger table
+                    for j in 0..=i {
+                        *self.state.finger_table[j].write() = successor;
+                    }
+                    // Fix all entries after which still use the old successor
+                    for entry in self.state.finger_table.iter() {
+                        if entry.read().address == current_finger.address {
+                            *entry.write() = successor;
+                        }
+                    }
+                    self.assert_finger_table_not_contain_self();
+
+                    // Finished nothing more to do
+                    break;
+                }
+                Err(e) => {
+                    // Go to next finger, assuming its dead
+                    debug!("{} Successor dead, {}", self.state.address, e);
+                }
             }
         }
+        Ok(())
+    }
 
+    pub async fn fix_fingers(&self) -> Result<()> {
         // Fix fingers
         for (i, entry) in self.state.finger_table.iter().enumerate() {
             // Check if the next entry is out of bounds
-            if i + 2 >= self.state.finger_table.len() {
+            if i + 1 >= self.state.finger_table.len() {
                 break;
             }
             let finger = entry.read();
@@ -504,13 +533,15 @@ impl SChord {
             tx.send(PeerMessage::GetNode(next_finger)).await?;
             solve_proof_of_work(&mut tx, &mut rx).await?;
 
-            debug!(
-                "{} Stabilizing finger {} add {:x} to id {:x}",
-                self.state.address,
-                i + 1,
-                2u64.pow((i + 1) as u32),
-                next_finger
-            );
+            /*
+                        debug!(
+                            "{} Stabilizing finger {} add {:x} to id {:x}",
+                            self.state.address,
+                            i + 1,
+                            2u64.pow((i + 1) as u32),
+                            next_finger,
+                        );
+            */
 
             match rx.recv().await? {
                 PeerMessage::GetNodeResponse(peer) => {
@@ -532,6 +563,105 @@ impl SChord {
         ChordPeer {
             id: self.state.node_id,
             address: self.state.address,
+        }
+    }
+    async fn stabilize_successor(&self, current_finger: ChordPeer) -> Result<ChordPeer> {
+        let (mut tx, mut rx) = connect_to_peer!(current_finger.address);
+        // Ask the selected predecessor for its predecessor
+        tx.send(PeerMessage::GetPredecessor).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
+        match rx.recv().await? {
+            PeerMessage::GetPredecessorResponse(supposed_predecessor) => {
+                if supposed_predecessor.address == self.state.address {
+                    // Everything fine, we are the predecessor of our successor
+                    tx.send(PeerMessage::CloseConnection).await?;
+                    Ok(supposed_predecessor)
+                } else {
+                    let mut closest_reachable_successor = supposed_predecessor;
+
+                    // Loop until we found the closest successor we can reach
+                    loop {
+                        match self.ask_for_predecessor(closest_reachable_successor).await {
+                            Ok(peer) => {
+                                if peer.address != self.state.address {
+                                    closest_reachable_successor = peer;
+                                } else {
+                                    // Found ourselves, so this has to be our successor
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                debug!("Encountered error when contacting, assuming dead");
+                                // Found last reachable successor
+                                break;
+                            }
+                        }
+                    }
+                    tx.send(PeerMessage::CloseConnection).await?;
+                    debug!("Contacting {}", closest_reachable_successor.address);
+                    let (mut tx_suc, mut rx_suc) =
+                        connect_to_peer!(closest_reachable_successor.address);
+
+                    // Send our successor that we are his predecessor
+                    tx_suc
+                        .send(PeerMessage::SetPredecessor(self.as_chord_peer()))
+                        .await?;
+                    solve_proof_of_work(&mut tx_suc, &mut rx_suc).await?;
+                    tx_suc.send(PeerMessage::CloseConnection).await?;
+                    Ok(closest_reachable_successor)
+                }
+            }
+            _ => {
+                tx.send(PeerMessage::CloseConnection).await?;
+                Err(anyhow!("Node answered unexpected message"))
+            }
+        }
+    }
+    async fn stabilize_predecessor(&self, predecessor_index: usize) -> Result<()> {
+        let some_predecessor = self.state.predecessors.read()[predecessor_index];
+
+        let (mut tx, mut rx) = connect_to_peer!(some_predecessor.address);
+        // Ask the selected predecessor for its predecessor
+        tx.send(PeerMessage::GetPredecessor).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
+        match rx.recv().await? {
+            PeerMessage::GetPredecessorResponse(preceding_predecessor) => {
+                tx.send(PeerMessage::CloseConnection).await?;
+
+                // Insert predecessor into list, if the predecessors before fail
+                let mut write_predecessors = self.state.predecessors.write();
+                if write_predecessors.len() > predecessor_index + 1
+                    && write_predecessors[predecessor_index + 1].address
+                        != preceding_predecessor.address
+                {
+                    write_predecessors.insert(predecessor_index + 1, preceding_predecessor);
+                } else {
+                    write_predecessors.push(preceding_predecessor);
+                }
+                Ok(())
+            }
+            _ => {
+                tx.send(PeerMessage::CloseConnection).await?;
+                Err(anyhow!("Node answered unexpected message"))
+            }
+        }
+    }
+
+    async fn ask_for_predecessor(&self, node_to_ask: ChordPeer) -> Result<ChordPeer> {
+        let (mut tx, mut rx) = connect_to_peer!(node_to_ask.address);
+        // Add one to the id we ask for, as the successor is responsible for this key
+        tx.send(PeerMessage::GetPredecessor).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
+        match rx.recv().await? {
+            PeerMessage::GetPredecessorResponse(peer) => {
+                tx.send(PeerMessage::CloseConnection).await?;
+
+                Ok(peer)
+            }
+            _ => {
+                tx.send(PeerMessage::CloseConnection).await?;
+                Err(anyhow!("Node answered unexpected message"))
+            }
         }
     }
     async fn ask_for_successor(&self, node_to_ask: ChordPeer) -> Result<ChordPeer> {
@@ -714,6 +844,7 @@ impl SChord {
                         // do nothing
                         debug!("Predecessor tried to set itself as predecessor");
                     } else {
+                        assert_ne!(supposed_predecessor.address, self.state.address);
                         // Check if this predecessor is actually between us and our previous predecessor
                         if is_between_on_ring(
                             supposed_predecessor.id,
@@ -791,11 +922,6 @@ async fn require_proof_of_work<'a>(
     let challenge = ProofOfWorkChallenge::new(difficulty);
     tx.send(PeerMessage::ProofOfWorkChallenge(challenge))
         .await?;
-    debug!(
-        "Sending proof of work challenge of difficulty {} to {}",
-        difficulty,
-        tx.get().peer_addr()?
-    );
     if let PeerMessage::ProofOfWorkResponse(r) = rx.recv().await? {
         return if challenge.check(r) {
             Ok(())
@@ -814,17 +940,7 @@ async fn solve_proof_of_work(
         PeerMessage::ProofOfWorkChallenge(challenge) => challenge,
         _ => return Err(anyhow!("Invalid message")),
     };
-    debug!(
-        "Received proof of work challenge of difficulty {} from {}",
-        challenge.difficulty,
-        rx.get().peer_addr()?
-    );
     let response = challenge.solve();
-    debug!(
-        "Solved proof of work challenge of difficulty {} from {}",
-        challenge.difficulty,
-        rx.get().peer_addr()?
-    );
     tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
     Ok(())
 }

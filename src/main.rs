@@ -4,7 +4,6 @@ use std::env;
 use std::error::Error;
 
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::chord::SChord;

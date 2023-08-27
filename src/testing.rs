@@ -342,15 +342,24 @@ mod tests {
     async fn test_stabilize() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 4;
-        let dhts = start_peers(amount_peers, false).await;
+        let mut dhts = start_peers(amount_peers, false).await;
 
-        //dhts[0].initiate_shutdown();
-        // dhts[1].initiate_shutdown();
+        print_dhts(&dhts);
+        error!("STABILIZE 1");
         stabilize_all(&dhts).await;
+        fix_fingers_all(&dhts).await;
 
-        // todo test disconnected node
-        // dhts[0].initiate_shutdown();
-        // stabilize_all(&dhts).await;
+        error!("TERMINATING NODE");
+        // Shutdown node and remove it from list
+        dhts[0].initiate_shutdown();
+        dhts.remove(0);
+        error!("STABILIZE 2");
+        stabilize_all(&dhts).await;
+        fix_fingers_all(&dhts).await;
+
+        error!("Everything fine?");
+
+        print_dhts(&dhts);
 
         let pairs_size: usize = 16;
         let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
@@ -385,11 +394,29 @@ mod tests {
 
     async fn stabilize_all(dhts: &Vec<P2pDht>) {
         for wrapper in dhts {
+            if wrapper.cancellation_token.is_cancelled() {
+                // dont stabilize when stopped
+                continue;
+            }
             wrapper
                 .dht
                 .stabilize()
                 .await
                 .expect("Stabilize resulted in an unexpected error");
+        }
+    }
+
+    async fn fix_fingers_all(dhts: &Vec<P2pDht>) {
+        for wrapper in dhts {
+            if wrapper.cancellation_token.is_cancelled() {
+                // dont stabilize when stopped
+                continue;
+            }
+            wrapper
+                .dht
+                .fix_fingers()
+                .await
+                .expect("Fix fingers resulted in an unexpected error");
         }
     }
 
