@@ -379,13 +379,13 @@ impl SChord {
                     // finger will recursively find out responsible node
                     tx.send(PeerMessage::GetNode(key)).await?;
                     solve_proof_of_work(&mut tx, &mut rx).await?;
-                    match rx.recv().await? {
+                    return match rx.recv().await? {
                         PeerMessage::GetNodeResponse(peer) => {
                             tx.send(PeerMessage::CloseConnection).await?;
-                            return Ok(peer);
+                            Ok(peer)
                         }
-                        _ => return Err(anyhow!("Wrong response")),
-                    }
+                        _ => Err(anyhow!("Wrong response")),
+                    };
                 }
                 Err(e) => {
                     debug!("Cant connect to finger {}", e);
