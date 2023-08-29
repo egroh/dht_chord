@@ -341,24 +341,20 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_stabilize() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let amount_peers: usize = 4;
+        let amount_peers: usize = 10;
         let mut dhts = start_peers(amount_peers, false).await;
 
-        print_dhts(&dhts);
-        error!("STABILIZE 1");
         stabilize_all(&dhts).await;
         fix_fingers_all(&dhts).await;
 
-        error!("TERMINATING NODE");
-        // Shutdown node and remove it from list
+        // Shutdown two nodes and remove them from list
         dhts[0].initiate_shutdown();
+        dhts[2].initiate_shutdown();
+        dhts.remove(2);
         dhts.remove(0);
-        error!("STABILIZE 2");
+
         stabilize_all(&dhts).await;
         fix_fingers_all(&dhts).await;
-
-        error!("Everything fine?");
-
         print_dhts(&dhts);
 
         let pairs_size: usize = 16;
@@ -441,13 +437,22 @@ mod tests {
     fn print_dhts(dhts: &Vec<P2pDht>) {
         for dht in dhts {
             debug!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
-            dht.dht.print_short();
+            debug!(
+                " S:{} {:x}",
+                dht.dht.state.finger_table[0].read().address,
+                dht.dht.state.finger_table[0].read().id
+            );
+            debug!(
+                " P:{} {:x}",
+                dht.dht.state.predecessors.read()[0].address,
+                dht.dht.state.predecessors.read()[0].id
+            );
             debug!("Stored values:");
             for (key, value) in dht.dht.state.local_storage.clone() {
                 debug!("  {:x}: {:?}", key, value);
             }
             debug!("Finger table:");
-            for entry in &dht.dht.state.finger_table[55..60] {
+            for entry in &dht.dht.state.finger_table[55..64] {
                 debug!("{:?}", *entry.read());
             }
             debug!("---");

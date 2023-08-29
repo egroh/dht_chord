@@ -38,7 +38,7 @@ pub struct SChordState {
     pub node_id: u64,
     address: SocketAddr,
     pub finger_table: Vec<RwLock<ChordPeer>>,
-    predecessors: RwLock<Vec<ChordPeer>>,
+    pub predecessors: RwLock<Vec<ChordPeer>>,
 
     pub local_storage: DashMap<u64, Vec<u8>>,
 }
@@ -473,8 +473,10 @@ impl SChord {
         // Fix Successors
         let mut previous_finger = None;
         for i in 0..self.state.finger_table.len() {
+            // Looping though the finger table until we found a node which we can contact
             let current_finger = *self.state.finger_table[i].read();
 
+            // Skip nodes which we already asked, and didnt respond
             match previous_finger {
                 None => previous_finger = Some(current_finger),
                 Some(previous_finger) => {
@@ -485,12 +487,16 @@ impl SChord {
                 }
             }
 
-            // Contact finger, trying to establish a correct successor
+            // Contact finger, if connection is successful the method will
+            // loop asking the current peer for its successor
+
+            // This gets us the closest successor in an unbroken connection chain from one of our fingers
             match self.stabilize_successor(current_finger).await {
                 Ok(successor) => {
                     if successor.address == self.state.address {
                         // Nothing to do, successor is alive and knows about us
-                        break;
+
+                        return Ok(());
                     }
 
                     // Fix all previous entries of the finger table
@@ -506,15 +512,16 @@ impl SChord {
                     self.assert_finger_table_not_contain_self();
 
                     // Finished nothing more to do
-                    break;
+                    return Ok(());
                 }
                 Err(e) => {
                     // Go to next finger, assuming its dead
-                    debug!("{} Successor dead, {}", self.state.address, e);
+                    debug!("{}: successor dead, {}", self.state.address, e);
                 }
             }
         }
-        Ok(())
+
+        Err(anyhow!("Reached end of loop"))
     }
 
     pub async fn fix_fingers(&self) -> Result<()> {
@@ -565,57 +572,46 @@ impl SChord {
             address: self.state.address,
         }
     }
-    async fn stabilize_successor(&self, current_finger: ChordPeer) -> Result<ChordPeer> {
-        let (mut tx, mut rx) = connect_to_peer!(current_finger.address);
-        // Ask the selected predecessor for its predecessor
-        tx.send(PeerMessage::GetPredecessor).await?;
-        solve_proof_of_work(&mut tx, &mut rx).await?;
-        match rx.recv().await? {
-            PeerMessage::GetPredecessorResponse(supposed_predecessor) => {
-                if supposed_predecessor.address == self.state.address {
-                    // Everything fine, we are the predecessor of our successor
-                    tx.send(PeerMessage::CloseConnection).await?;
-                    Ok(supposed_predecessor)
-                } else {
-                    let mut closest_reachable_successor = supposed_predecessor;
+    async fn stabilize_successor(&self, possible_successor: ChordPeer) -> Result<ChordPeer> {
+        let mut closest_reachable_successor = possible_successor;
+        let mut next_possible_successor = closest_reachable_successor;
 
-                    // Loop until we found the closest successor we can reach
-                    loop {
-                        match self.ask_for_predecessor(closest_reachable_successor).await {
-                            Ok(peer) => {
-                                if peer.address != self.state.address {
-                                    closest_reachable_successor = peer;
-                                } else {
-                                    // Found ourselves, so this has to be our successor
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                debug!("Encountered error when contacting, assuming dead");
-                                // Found last reachable successor
-                                break;
-                            }
-                        }
+        // Loop until we found the closest successor we can reach
+        loop {
+            match self.ask_for_predecessor(next_possible_successor).await {
+                Ok(peer) => {
+                    if peer.address != self.state.address {
+                        closest_reachable_successor = next_possible_successor;
+                        next_possible_successor = peer;
+                    } else {
+                        // Found ourselves, so this has to be our successor
+                        break;
                     }
-                    tx.send(PeerMessage::CloseConnection).await?;
-                    debug!("Contacting {}", closest_reachable_successor.address);
-                    let (mut tx_suc, mut rx_suc) =
-                        connect_to_peer!(closest_reachable_successor.address);
-
-                    // Send our successor that we are his predecessor
-                    tx_suc
-                        .send(PeerMessage::SetPredecessor(self.as_chord_peer()))
-                        .await?;
-                    solve_proof_of_work(&mut tx_suc, &mut rx_suc).await?;
-                    tx_suc.send(PeerMessage::CloseConnection).await?;
-                    Ok(closest_reachable_successor)
+                }
+                Err(e) => {
+                    debug!(
+                        "{}: found successor in chain which is dead {}",
+                        self.state.address, e
+                    );
+                    // Found last reachable successor
+                    break;
                 }
             }
-            _ => {
-                tx.send(PeerMessage::CloseConnection).await?;
-                Err(anyhow!("Node answered unexpected message"))
-            }
         }
+        debug!(
+            "{}: Contacting reachable successor {}, setting ourself as predecessor",
+            self.state.address, closest_reachable_successor.address
+        );
+
+        let (mut tx_suc, mut rx_suc) = connect_to_peer!(closest_reachable_successor.address);
+
+        // Send our successor that we are his predecessor
+        tx_suc
+            .send(PeerMessage::SetPredecessor(self.as_chord_peer()))
+            .await?;
+        solve_proof_of_work(&mut tx_suc, &mut rx_suc).await?;
+        tx_suc.send(PeerMessage::CloseConnection).await?;
+        Ok(closest_reachable_successor)
     }
     async fn stabilize_predecessor(&self, predecessor_index: usize) -> Result<()> {
         let some_predecessor = self.state.predecessors.read()[predecessor_index];
@@ -878,11 +874,6 @@ impl SChord {
                 panic!("Reached invalid state");
             }
         }
-    }
-
-    pub fn print_short(&self) {
-        debug!(" P:{}", self.state.predecessors.read()[0].address);
-        debug!(" S:{}", self.state.finger_table[0].read().address);
     }
 
     pub fn print(&self) {
