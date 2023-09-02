@@ -20,6 +20,11 @@ use tokio_util::sync::CancellationToken;
 use crate::chord::peer_messages::{ChordPeer, PeerMessage, ProofOfWorkChallenge, SplitResponse};
 
 pub mod peer_messages;
+
+/// Simple macro for opening a connection to another peer with the provided address
+/// # Arguments
+///
+/// * `address` - the node to which an connection should be established
 macro_rules! connect_to_peer {
     ($address:expr) => {{
         let stream = TcpStream::connect($address).await?;
@@ -28,29 +33,51 @@ macro_rules! connect_to_peer {
     }};
 }
 
+/// Structure containing the state of the local node and all methods interacting with it
 #[derive(Clone)]
 pub struct Chord {
-    pub(crate) state: Arc<SChordState>,
+    state: Arc<SChordState>,
 }
 
-pub struct SChordState {
+/// Structure containing all the state of chord
+struct SChordState {
+    /// The duration we store things per default
     default_store_duration: Duration,
+    /// The maximum duration we store an item
     max_store_duration: Duration,
 
-    pub(crate) node_id: u64,
+    /// the identifier of this node on the key ring
+    node_id: u64,
+    /// the address where this node is reachable
     address: SocketAddr,
-    pub(crate) finger_table: Vec<RwLock<ChordPeer>>,
-    pub(crate) predecessors: RwLock<Vec<ChordPeer>>,
 
-    pub(crate) local_storage: DashMap<u64, Vec<u8>>,
+    /// The finger table is represented by a vector with 64 entries, which are individually read write locked.
+    ///  Since the finger table never changes in size, and per invariant individual entries are always correct
+    /// (but possibly non-optimal) we can only always lock one entry
+    finger_table: Vec<RwLock<ChordPeer>>,
+    /// The predecessors vector is protected by a single lock since they change in since and have direct
+    /// effects like the responsibility for keys
+    predecessors: RwLock<Vec<ChordPeer>>,
+
+    /// hashtable storing all hash entries which this node is resposible for
+    local_storage: DashMap<u64, Vec<u8>>,
 }
 
 impl Chord {
+    /// Resturns the address on which this node is listining for incoming connections
     #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
     }
 
+    /// Method startign the server socket to accept request from other peers
+    ///
+    /// This method needs to be called after construction of the `Chord` strcut
+    ///
+    /// # Arguments
+    ///
+    /// * `server_address` - the address on which the server will be vound
+    /// * `cancellation_token` - of this token is cancelled, the node will not accept any more new connections and unbind the socket
     pub async fn start_server_socket(
         &self,
         server_address: SocketAddr,
@@ -651,6 +678,13 @@ impl Chord {
         }
     }
 
+    /// Returns a result with the predecessor of `node_to_ask`.
+    /// If the provided peer is not reachabe an error is returned
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `node_to_ask` - the node to ask for its predecessor
     async fn ask_for_predecessor(&self, node_to_ask: ChordPeer) -> Result<ChordPeer> {
         let (mut tx, mut rx) = connect_to_peer!(node_to_ask.address);
         // Add one to the id we ask for, as the successor is responsible for this key
@@ -883,7 +917,32 @@ impl Chord {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn print_chord(&self) {
+        debug!("{}  {:x}", self.state.address, self.state.node_id);
+        debug!(
+            " S:{} {:x}",
+            self.state.finger_table[0].read().address,
+            self.state.finger_table[0].read().id
+        );
+        debug!(
+            " P:{} {:x}",
+            self.state.predecessors.read()[0].address,
+            self.state.predecessors.read()[0].id
+        );
+        debug!("Stored values:");
+        for (key, value) in self.state.local_storage.clone() {
+            debug!("  {:x}: {:?}", key, value);
+        }
+        debug!("Finger table:");
+        for entry in &self.state.finger_table[55..64] {
+            debug!("{:?}", *entry.read());
+        }
+        debug!("---");
+    }
 }
+
 fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     if lower == upper {
         return true;
@@ -941,6 +1000,7 @@ async fn solve_proof_of_work(
     tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
     Ok(())
 }
+
 #[test]
 fn test_is_between_on_ring() {
     // using common code.

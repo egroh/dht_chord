@@ -456,28 +456,10 @@ mod tests {
             }
         }
     }
+    #[cfg(test)]
     fn print_dhts(dhts: &Vec<P2pDht>) {
         for dht in dhts {
-            debug!("{}  {:x}", dht.api_address, dht.dht.state.node_id,);
-            debug!(
-                " S:{} {:x}",
-                dht.dht.state.finger_table[0].read().address,
-                dht.dht.state.finger_table[0].read().id
-            );
-            debug!(
-                " P:{} {:x}",
-                dht.dht.state.predecessors.read()[0].address,
-                dht.dht.state.predecessors.read()[0].id
-            );
-            debug!("Stored values:");
-            for (key, value) in dht.dht.state.local_storage.clone() {
-                debug!("  {:x}: {:?}", key, value);
-            }
-            debug!("Finger table:");
-            for entry in &dht.dht.state.finger_table[55..64] {
-                debug!("{:?}", *entry.read());
-            }
-            debug!("---");
+            dht.dht.print_chord();
         }
     }
 }
