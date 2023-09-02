@@ -150,7 +150,7 @@ pub(crate) async fn process_api_put_request(dht: SChord, put: DhtPut) {
     let hashed_key = hash_vec_bytes(&put.key);
     // todo maybe not ignore error
     let _ = dht
-        .insert_with_ttl(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
+        .insert(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
         .await;
 }
 async fn process_api_get_request(

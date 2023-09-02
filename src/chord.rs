@@ -44,6 +44,7 @@ pub struct SChordState {
 }
 
 impl SChord {
+    #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
     }
@@ -242,11 +243,7 @@ impl SChord {
         }
     }
 
-    pub async fn insert(&self, key: u64, value: Vec<u8>) -> Result<()> {
-        self.insert_with_ttl(key, value, self.state.default_store_duration)
-            .await
-    }
-    pub async fn insert_with_ttl(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
+    pub async fn insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug!("{} API storage insert key {}", self.state.address, key);
         if self.is_responsible_for_key(key) {
             debug!("Storing locally!");
