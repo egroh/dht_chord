@@ -6,7 +6,7 @@ use std::error::Error;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
-use crate::chord::SChord;
+use crate::chord::Chord;
 
 use env_logger::Env;
 use ini::ini;
@@ -21,7 +21,7 @@ struct P2pDht {
     max_store_duration: Duration,
     public_server_address: SocketAddr,
     api_address: SocketAddr,
-    dht: SChord,
+    dht: Chord,
     peer_server_thread: Option<JoinHandle<()>>,
     api_server_thread: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
@@ -37,7 +37,7 @@ impl P2pDht {
         start_api_server: bool,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
-        let chord = SChord::new(initial_peer, public_server_address).await;
+        let chord = Chord::new(initial_peer, public_server_address).await;
         let peer_server_thread = Some(
             chord
                 .start_server_socket(public_server_address, cancellation_token.clone())

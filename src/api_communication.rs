@@ -31,7 +31,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::chord::SChord;
+use crate::chord::Chord;
 
 /// Requests the DHT to store a value
 pub const API_DHT_PUT: u16 = 650;
@@ -179,7 +179,7 @@ pub(crate) fn hash_key_bytes(vec_bytes: &[u8]) -> u64 {
     vec_bytes.hash(&mut hasher);
     hasher.finish()
 }
-pub(crate) async fn process_api_put_request(dht: SChord, put: DhtPut) {
+pub(crate) async fn process_api_put_request(dht: Chord, put: DhtPut) {
     let hashed_key = hash_key_bytes(&put.key);
     if let Err(e) = dht
         .insert(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
@@ -189,7 +189,7 @@ pub(crate) async fn process_api_put_request(dht: SChord, put: DhtPut) {
     }
 }
 async fn process_api_get_request(
-    dht: SChord,
+    dht: Chord,
     get: &DhtGet,
     response_stream: &Arc<Mutex<OwnedWriteHalf>>,
 ) {
@@ -234,7 +234,7 @@ async fn process_api_get_request(
     }
 }
 pub(crate) async fn start_api_server(
-    dht: SChord,
+    dht: Chord,
     api_address: SocketAddr,
     cancellation_token: CancellationToken,
 ) -> JoinHandle<()> {

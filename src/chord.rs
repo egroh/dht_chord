@@ -29,7 +29,7 @@ macro_rules! connect_to_peer {
 }
 
 #[derive(Clone)]
-pub struct SChord {
+pub struct Chord {
     pub(crate) state: Arc<SChordState>,
 }
 
@@ -45,7 +45,7 @@ pub struct SChordState {
     pub(crate) local_storage: DashMap<u64, Vec<u8>>,
 }
 
-impl SChord {
+impl Chord {
     #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
@@ -57,7 +57,7 @@ impl SChord {
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
         info!("Starting SChord server on {}", server_address);
-        let self_clone = SChord {
+        let self_clone = Chord {
             state: self.state.clone(),
         };
         let listener = TcpListener::bind(server_address)
@@ -74,7 +74,7 @@ impl SChord {
                 tokio::select! {
                     result = listener.accept() => {
                     let (stream, _) = result.unwrap();
-                    let self_clone = SChord {
+                    let self_clone = Chord {
                         state: self_clone.state.clone(),
                     };
                     tokio::spawn(async move {
@@ -108,7 +108,7 @@ impl SChord {
         let node_id = hasher.finish();
 
         if let Some(initial_peer) = initial_peer {
-            let initial_peer_connection_result = async || -> Result<SChord> {
+            let initial_peer_connection_result = async || -> Result<Chord> {
                 // Connect to initial node
                 let (mut tx, mut rx) = connect_to_peer!(initial_peer);
 
@@ -202,7 +202,7 @@ impl SChord {
                         // todo: stabilize
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
-                        Ok(SChord {
+                        Ok(Chord {
                             state: Arc::new(SChordState {
                                 default_store_duration: Duration::from_secs(60),
                                 max_store_duration: Duration::from_secs(600),
@@ -224,7 +224,7 @@ impl SChord {
                 }
             }
         } else {
-            SChord {
+            Chord {
                 state: Arc::new(SChordState {
                     default_store_duration: Duration::from_secs(60),
                     max_store_duration: Duration::from_secs(600),
