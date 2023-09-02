@@ -520,7 +520,7 @@ impl SChord {
             }
         }
 
-        Err(anyhow!("Reached end of loop"))
+        Err(anyhow!("Did not find any contactable node in finger table"))
     }
 
     pub(crate) async fn fix_fingers(&self) -> Result<()> {
@@ -588,10 +588,19 @@ impl SChord {
                     }
                 }
                 Err(e) => {
+                    if closest_reachable_successor.address == next_possible_successor.address {
+                        return Err(anyhow!(
+                            "{}: Cannot contact possible successor {}",
+                            self.state.address,
+                            closest_reachable_successor.address
+                        ));
+                    }
+
                     debug!(
-                        "{}: found successor in chain which is dead {}",
-                        self.state.address, e
+                        "{}: found successor {} in chain which is dead {}",
+                        self.state.address, next_possible_successor.address, e
                     );
+
                     // Found last reachable successor
                     break;
                 }

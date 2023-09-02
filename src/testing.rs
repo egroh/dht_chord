@@ -13,13 +13,16 @@ mod tests {
     use crate::api_communication;
     use crate::P2pDht;
 
-    async fn start_peers(amount: usize, start_api_socket: bool) -> Vec<P2pDht> {
+    async fn start_peers(
+        amount: usize,
+        start_api_socket: bool,
+        mut port_start: u16,
+    ) -> Vec<P2pDht> {
         let mut dhts: Vec<P2pDht> = vec![];
 
-        static COUNTER: AtomicU32 = AtomicU32::new(1);
-
         for i in 0..amount {
-            let port_counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let port_counter = port_start;
+            port_start += 1;
             let dht = P2pDht::new(
                 Duration::from_secs(60),
                 Duration::from_secs(60),
@@ -56,14 +59,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_start_two_peers() {
-        let dhts = start_peers(2, true).await;
+        let dhts = start_peers(2, true, 1).await;
         stop_dhts(dhts).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, true).await;
+        let dhts = start_peers(1, true, 2).await;
 
         let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -106,7 +109,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, true).await;
+        let dhts = start_peers(1, true, 3).await;
 
         let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -201,7 +204,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, false).await;
+        let dhts = start_peers(1, false, 4).await;
 
         let key = [0x1; 32];
         let value = vec![0x1, 0x2, 0x3];
@@ -231,7 +234,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_multiple_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(2, false).await;
+        let dhts = start_peers(2, false, 20).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -304,7 +307,7 @@ mod tests {
     async fn test_hammer_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 10;
-        let dhts = start_peers(amount_peers, false).await;
+        let dhts = start_peers(amount_peers, false, 30).await;
 
         // tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -343,7 +346,7 @@ mod tests {
     async fn test_stabilize() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 10;
-        let mut dhts = start_peers(amount_peers, false).await;
+        let mut dhts = start_peers(amount_peers, false, 60).await;
 
         stabilize_all(&dhts).await;
         fix_fingers_all(&dhts).await;
@@ -395,6 +398,9 @@ mod tests {
                 // dont stabilize when stopped
                 continue;
             }
+
+            debug!("Stabilizing {}", wrapper.api_address);
+
             wrapper
                 .dht
                 .stabilize()
