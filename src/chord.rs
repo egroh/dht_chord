@@ -1,4 +1,37 @@
 //! Black box implementation of a distributed hash table
+//!
+//! We have designed this module as stand-alone [Chord](https://en.wikipedia.org/wiki/Chord_(peer-to-peer)) implementation.
+//! It can operate independently from the API module and is usable as a stand-alone crate.
+//!
+//! # Features:
+//! - Key-Value storage
+//! - Distributed, if more than one node available (but fully functional with one node only)
+//! - Built-in replication
+//! - IPv4 and IPv6 support
+//! - Automatic node discovery
+//! - Stabilization if nodes leave or join
+//! - Housekeeping thread to remove expired entries and refresh
+//! - Completely asynchronous and multi-threaded
+//! - Requests from the API and from other nodes are processed and answered concurrently
+//! - Free of race conditions due to Rusts ownership model
+//! - Performance optimized implementation, capable of running more than 20.000 nodes on a single machine //todo: measure
+//!
+//! # Security measures:
+//! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
+//!     - Does not prevent [byzantine](https://en.wikipedia.org/wiki/Byzantine_fault) nodes from splitting the network or eclipsing nodes,
+//!     but prevents greedy nodes from abusing the storage system
+//!     - Difficulty is independently adjustable for each request type
+//!     - Currently we maintain two difficulty settings,
+//!     one for get requests and one for (potentially disruptive) write/storage requests
+//! - Addresses of nodes assigned based on hash of IP + port
+//!     - This could be easily adjusted to only hash IPs,
+//!     providing limited [sybil defense](https://en.wikipedia.org/wiki/Sybil_attack)
+//!     - In case of IPv6, we could only hash a masked version of the IP
+//!     - We have currently not implemented these,
+//!     as it would interfere with development and testing
+//! - Limited defence against nodes refusing to store values or disconnecting
+//!     - Our housekeeping thread continuously refreshes values that have been stored in the DHT upon our own request
+//! # Security evaluation:
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -59,24 +92,24 @@ struct SChordState {
     /// effects like the responsibility for keys
     predecessors: RwLock<Vec<ChordPeer>>,
 
-    /// hashtable storing all hash entries which this node is resposible for
+    /// hashtable storing all hash entries which this node is responsible for
     local_storage: DashMap<u64, Vec<u8>>,
 }
 
 impl Chord {
-    /// Resturns the address on which this node is listining for incoming connections
+    /// Resturns the address on which this node is listening for incoming connections
     #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
     }
 
-    /// Method startign the server socket to accept request from other peers
+    /// Method starting the server socket to accept request from other peers
     ///
-    /// This method needs to be called after construction of the `Chord` strcut
+    /// This method needs to be called after construction of the `Chord` struct
     ///
     /// # Arguments
     ///
-    /// * `server_address` - the address on which the server will be vound
+    /// * `server_address` - the address on which the server will be found
     /// * `cancellation_token` - of this token is cancelled, the node will not accept any more new connections and unbind the socket
     pub async fn start_server_socket(
         &self,
