@@ -28,23 +28,23 @@ macro_rules! connect_to_peer {
 
 #[derive(Clone)]
 pub struct SChord {
-    pub state: Arc<SChordState>,
+    pub(crate) state: Arc<SChordState>,
 }
 
 pub struct SChordState {
     default_store_duration: Duration,
     max_store_duration: Duration,
 
-    pub node_id: u64,
+    pub(crate) node_id: u64,
     address: SocketAddr,
-    pub finger_table: Vec<RwLock<ChordPeer>>,
-    pub predecessors: RwLock<Vec<ChordPeer>>,
+    pub(crate) finger_table: Vec<RwLock<ChordPeer>>,
+    pub(crate) predecessors: RwLock<Vec<ChordPeer>>,
 
-    pub local_storage: DashMap<u64, Vec<u8>>,
+    pub(crate) local_storage: DashMap<u64, Vec<u8>>,
 }
 
 impl SChord {
-    pub fn get_address(&self) -> SocketAddr {
+    pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
     }
 
@@ -398,7 +398,7 @@ impl SChord {
         }
     }
 
-    pub async fn stabilize(&self) -> Result<()> {
+    pub(crate) async fn stabilize(&self) -> Result<()> {
         // fixing immediate predecessor
         loop {
             let predecessors = self.state.predecessors.read();
@@ -524,7 +524,7 @@ impl SChord {
         Err(anyhow!("Reached end of loop"))
     }
 
-    pub async fn fix_fingers(&self) -> Result<()> {
+    pub(crate) async fn fix_fingers(&self) -> Result<()> {
         // Fix fingers
         for (i, entry) in self.state.finger_table.iter().enumerate() {
             // Check if the next entry is out of bounds
@@ -875,23 +875,6 @@ impl SChord {
             }
         }
     }
-
-    pub fn print(&self) {
-        debug!("Id {:x}: {}", self.state.node_id, self.state.address);
-        for predecessor in self.state.predecessors.read().iter() {
-            debug!(" P {:x}: {}", predecessor.id, predecessor.address);
-        }
-        for (i, entry) in self
-            .state
-            .finger_table
-            .iter()
-            .take(10)
-            .map(|entry| entry.read())
-            .enumerate()
-        {
-            debug!(" F {} {:x}: {}", i, entry.id, entry.address);
-        }
-    }
 }
 fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     if lower == upper {
@@ -950,7 +933,6 @@ async fn solve_proof_of_work(
     tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
     Ok(())
 }
-
 #[test]
 fn test_is_between_on_ring() {
     // using common code.

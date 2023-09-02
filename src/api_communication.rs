@@ -26,7 +26,7 @@ const API_DHT_FAILURE: u16 = 653;
 pub(crate) const API_DHT_SHUTDOWN: u16 = 654;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ApiPacketHeader {
+pub(crate) struct ApiPacketHeader {
     pub(crate) size: u16,
     pub(crate) message_type: u16,
 }
@@ -70,7 +70,7 @@ struct ApiPacket {
     message: ApiPacketMessage,
 }
 
-pub fn with_big_endian(
+pub(crate) fn with_big_endian(
 ) -> WithOtherEndian<WithOtherIntEncoding<DefaultOptions, FixintEncoding>, BigEndian> {
     DefaultOptions::new()
         .with_fixint_encoding()
@@ -190,7 +190,7 @@ async fn process_api_get_request(
         }
     }
 }
-pub async fn start_api_server(
+pub(crate) async fn start_api_server(
     dht: SChord,
     api_address: SocketAddr,
     cancellation_token: CancellationToken,
