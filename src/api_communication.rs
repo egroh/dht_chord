@@ -1,5 +1,18 @@
 //! Provides a server socket for API communication
-
+//!
+//! The API-communications module is responsible for communication with other modules.
+//! Incoming requests are dispatched to a worker thread pool,
+//! that will process each request independently and asynchronously.
+//!
+//! Answer to messages received are not guaranteed to be sent in the same order as the requests were received.
+//!
+//!
+//! The only additional API message we have introduced, is the [`API_DHT_SHUTDOWN`] message.
+//! It allows for a gracefully shut down of the DHT server through the API-socket.
+//!
+//! All [`ApiPacket`] s we receive are first parsed by their [`ApiPacketHeader`].
+//! Depending on the header,
+//! we then parse the rest of the message into the corresponding [`ApiPacketMessage`].
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
@@ -7,7 +20,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bincode::config::{BigEndian, FixintEncoding, WithOtherEndian, WithOtherIntEncoding};
 use bincode::{DefaultOptions, Options};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -21,29 +33,51 @@ use tokio_util::sync::CancellationToken;
 
 use crate::chord::SChord;
 
-pub(crate) const API_DHT_PUT: u16 = 650;
-pub const API_DHT_GET: u16 = 651;
-const API_DHT_SUCCESS: u16 = 652;
-const API_DHT_FAILURE: u16 = 653;
-pub(crate) const API_DHT_SHUTDOWN: u16 = 654;
+/// Requests the DHT to store a value
+pub const API_DHT_PUT: u16 = 650;
 
+/// Requests the DHT to retrieve a value
+pub const API_DHT_GET: u16 = 651;
+
+/// Answer to a successful [`API_DHT_GET`] request
+pub const API_DHT_SUCCESS: u16 = 652;
+
+/// Answer to a failed [`API_DHT_GET`] request
+pub const API_DHT_FAILURE: u16 = 653;
+
+/// Requests our DHT node to shutdown
+///
+/// The corresponding packet consists only of a message-header, with the message-type set to `654`.
+pub const API_DHT_SHUTDOWN: u16 = 654;
+
+/// Internal representation of all packages received on the API socket
+///
+/// After 4 header bytes are received and parsed into an [`ApiPacketHeader`],
+/// the rest of the message is parsed into the corresponding [`ApiPacketMessage`].
+pub struct ApiPacket {
+    header: ApiPacketHeader,
+    message: ApiPacketMessage,
+}
+/// Header of an [`ApiPacket`]
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct ApiPacketHeader {
+pub struct ApiPacketHeader {
+    /// The size indicates the total length of a message, *including* the header
     pub(crate) size: u16,
+    /// Indicates the type of the message with a well-known constant
     pub(crate) message_type: u16,
 }
 
-enum ApiPacketMessage {
+/// Parsed content of an [`ApiPacket`]
+pub enum ApiPacketMessage {
     Put(DhtPut),
     Get(DhtGet),
-    Failure(DhtGetFailure),
-    Success(DhtGetResponse),
     Shutdown,
     Unparsed(Vec<u8>),
 }
 
 #[derive(Debug)]
-pub(crate) struct DhtPut {
+/// Internal representation of a `DHT_PUT` request
+pub struct DhtPut {
     pub(crate) ttl: u16,
     pub(crate) replication: u8,
     pub(crate) reserved: u8,
@@ -51,33 +85,25 @@ pub(crate) struct DhtPut {
     pub(crate) value: Vec<u8>,
 }
 
+/// Internal representation of a `DHT_GET` request
 #[derive(Deserialize, Debug)]
-struct DhtGet {
+pub struct DhtGet {
     key: [u8; 32],
 }
 
+/// Internal representation of a `DHT_SUCCESS` response
 #[derive(Debug)]
-struct DhtGetResponse {
+pub struct DhtGetSuccess {
     key: [u8; 32],
     value: Vec<u8>,
 }
 
+/// Internal representation of a `DHT_FAILURE` response
 #[derive(Serialize, Debug)]
-struct DhtGetFailure {
+pub struct DhtGetFailure {
     key: [u8; 32],
 }
 
-struct ApiPacket {
-    header: ApiPacketHeader,
-    message: ApiPacketMessage,
-}
-
-pub(crate) fn with_big_endian(
-) -> WithOtherEndian<WithOtherIntEncoding<DefaultOptions, FixintEncoding>, BigEndian> {
-    DefaultOptions::new()
-        .with_fixint_encoding()
-        .with_big_endian()
-}
 impl ApiPacket {
     fn default() -> Self {
         ApiPacket {
@@ -119,7 +145,12 @@ impl ApiPacket {
                                 format!["DHT GET invalid size: {}", self.header.size].into()
                             );
                         }
-                        self.message = ApiPacketMessage::Get(with_big_endian().deserialize(v)?);
+                        self.message = ApiPacketMessage::Get(
+                            DefaultOptions::new()
+                                .with_fixint_encoding()
+                                .with_big_endian()
+                                .deserialize(v)?,
+                        );
                     }
                     API_DHT_SHUTDOWN => {
                         if self.header.size != 4 {
@@ -143,31 +174,37 @@ impl ApiPacket {
     }
 }
 
-pub(crate) fn hash_vec_bytes(vec_bytes: &[u8]) -> u64 {
+pub(crate) fn hash_key_bytes(vec_bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     vec_bytes.hash(&mut hasher);
     hasher.finish()
 }
 pub(crate) async fn process_api_put_request(dht: SChord, put: DhtPut) {
-    let hashed_key = hash_vec_bytes(&put.key);
-    // todo maybe not ignore error
-    let _ = dht
+    let hashed_key = hash_key_bytes(&put.key);
+    if let Err(e) = dht
         .insert(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
-        .await;
+        .await
+    {
+        warn!("Error inserting key {:?} into DHT: {}", &put.key, e);
+    }
 }
 async fn process_api_get_request(
     dht: SChord,
     get: &DhtGet,
     response_stream: &Arc<Mutex<OwnedWriteHalf>>,
 ) {
-    let hashed_key = hash_vec_bytes(&get.key);
+    let hashed_key = hash_key_bytes(&get.key);
     match dht.get(hashed_key).await {
         Ok(value) => {
             let header = ApiPacketHeader {
                 size: 4 + get.key.len() as u16 + value.len() as u16,
                 message_type: API_DHT_SUCCESS,
             };
-            let mut buf = with_big_endian().serialize(&header).unwrap();
+            let mut buf = DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
+                .serialize(&header)
+                .unwrap();
             buf.extend(get.key);
             buf.extend(value);
 
@@ -183,7 +220,11 @@ async fn process_api_get_request(
                 size: 4 + get.key.len() as u16,
                 message_type: API_DHT_FAILURE,
             };
-            let mut buf = with_big_endian().serialize(&header).unwrap();
+            let mut buf = DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
+                .serialize(&header)
+                .unwrap();
             buf.extend(get.key);
 
             if let Err(e) = response_stream.lock().await.write_all(&buf).await {
@@ -242,7 +283,7 @@ pub(crate) async fn start_api_server(
                                         header_bytes.push(*byte);
                                         if header_bytes.len() == 4 {
                                             if let Ok(header_success) =
-                                                with_big_endian().deserialize(&header_bytes)
+                                                DefaultOptions::new().with_fixint_encoding().with_big_endian().deserialize(&header_bytes)
                                             {
                                                 debug!("Deserialized header: {:?}", header_success);
                                                 packet.header = header_success;

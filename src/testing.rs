@@ -1,10 +1,9 @@
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
-    use bincode::Options;
+    use bincode::{DefaultOptions, Options};
     use env_logger::Env;
     use log::{debug, error, info};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -78,7 +77,9 @@ mod tests {
             message_type: api_communication::API_DHT_GET,
         };
 
-        let mut buf = api_communication::with_big_endian()
+        let mut buf = DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_big_endian()
             .serialize(&header)
             .unwrap();
         buf.extend(key);
@@ -95,7 +96,9 @@ mod tests {
         assert_eq!(bytes_read, 36);
 
         // Send shutdown request
-        let buf = api_communication::with_big_endian()
+        let buf = DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_big_endian()
             .serialize(&api_communication::ApiPacketHeader {
                 size: 4,
                 message_type: api_communication::API_DHT_SHUTDOWN,
@@ -132,22 +135,30 @@ mod tests {
         };
         let mut buf = Vec::new();
         buf.extend(
-            api_communication::with_big_endian()
+            DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
                 .serialize(&header)
                 .unwrap(),
         );
         buf.extend(
-            api_communication::with_big_endian()
+            DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
                 .serialize(&payload.ttl)
                 .unwrap(),
         );
         buf.extend(
-            api_communication::with_big_endian()
+            DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
                 .serialize(&payload.replication)
                 .unwrap(),
         );
         buf.extend(
-            api_communication::with_big_endian()
+            DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_big_endian()
                 .serialize(&payload.reserved)
                 .unwrap(),
         );
@@ -167,7 +178,9 @@ mod tests {
             size: 4 + key.len() as u16,
             message_type: api_communication::API_DHT_GET,
         };
-        let mut buf = api_communication::with_big_endian()
+        let mut buf = DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_big_endian()
             .serialize(&header)
             .unwrap();
         buf.extend(key);
@@ -192,7 +205,9 @@ mod tests {
             size: 4,
             message_type: api_communication::API_DHT_SHUTDOWN,
         };
-        let mut buf = api_communication::with_big_endian()
+        let mut buf = DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_big_endian()
             .serialize(&header)
             .unwrap();
         buf.extend(key);
@@ -224,7 +239,7 @@ mod tests {
         .await;
 
         // Get
-        let hashed_key = api_communication::hash_vec_bytes(&key);
+        let hashed_key = api_communication::hash_key_bytes(&key);
         let value_back = dht.dht.get(hashed_key).await.unwrap();
 
         assert_eq!(value_back, value);
@@ -426,7 +441,7 @@ mod tests {
     async fn check_all_keys(dhts: &Vec<P2pDht>, original_pairs: Vec<([u8; 32], Vec<u8>)>) {
         for (key, value) in original_pairs {
             // Get
-            let hashed_key = api_communication::hash_vec_bytes(&key);
+            let hashed_key = api_communication::hash_key_bytes(&key);
 
             for dht in dhts {
                 match dht.dht.get(hashed_key).await {
