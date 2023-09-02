@@ -50,7 +50,7 @@
 //!
 //! You can also build this documentation locally:
 //! ```bash
-//! cargo doc --document-private-items
+//! cargo doc --no-deps --document-private-items
 //! ```
 //! The documentation will be created in `target/doc/p2p_dht/index.html`.
 //! ## Testing:
