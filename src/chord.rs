@@ -1,3 +1,5 @@
+//! Black box implementation of a distributed hash table
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;

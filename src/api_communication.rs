@@ -1,3 +1,5 @@
+//! Provides a server socket for API communication
+
 use std::collections::hash_map::DefaultHasher;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
