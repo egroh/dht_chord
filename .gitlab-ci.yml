@@ -1,0 +1,23 @@
+image: rust:latest
+
+build:
+  script:
+    - cargo build --release
+  artifacts:
+    paths:
+      - target/release/p2p_dht
+    expire_in: 1 week
+
+test:
+  script:
+    - cargo --version && rustc --version
+    - cargo test
+    - cargo test --release
+
+documentation:
+  script:
+    - cargo doc --document-private-items
+  artifacts:
+    paths:
+      - target/doc
+    expire_in: 1 week
