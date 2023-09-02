@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::chord::peer_messages::{ChordPeer, PeerMessage, ProofOfWorkChallenge, SplitResponse};
 
-mod peer_messages;
+pub mod peer_messages;
 macro_rules! connect_to_peer {
     ($address:expr) => {{
         let stream = TcpStream::connect($address).await?;

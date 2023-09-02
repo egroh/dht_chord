@@ -10,7 +10,7 @@
 //! The only additional API message we have introduced, is the [`API_DHT_SHUTDOWN`] message.
 //! It allows for a gracefully shut down of the DHT server through the API-socket.
 //!
-//! All [`ApiPacket`] s we receive are first parsed by their [`ApiPacketHeader`].
+//! All [`ApiPacket`] s we receive, are first parsed by their [`ApiPacketHeader`].
 //! Depending on the header,
 //! we then parse the rest of the message into the corresponding [`ApiPacketMessage`].
 use std::collections::hash_map::DefaultHasher;
@@ -67,7 +67,10 @@ pub struct ApiPacketHeader {
     pub(crate) message_type: u16,
 }
 
-/// Parsed content of an [`ApiPacket`]
+/// Content of an [`ApiPacket`]
+///
+/// Once enough bytes have been received,
+/// the message is parsed fom `Unparsed` into the matching request.
 pub enum ApiPacketMessage {
     Put(DhtPut),
     Get(DhtGet),
@@ -78,10 +81,15 @@ pub enum ApiPacketMessage {
 #[derive(Debug)]
 /// Internal representation of a `DHT_PUT` request
 pub struct DhtPut {
+    /// Time-to-live of the value in seconds
     pub(crate) ttl: u16,
+    /// How many copies of the value should be stored in the DHT
     pub(crate) replication: u8,
+    /// Reserved for future use
     pub(crate) reserved: u8,
+    /// Fixed size 256 bit key (we hash all keys into a 64 bit integer before storing them)
     pub(crate) key: [u8; 32],
+    /// Value of arbitrary size
     pub(crate) value: Vec<u8>,
 }
 
