@@ -16,7 +16,7 @@ test:
 
 documentation:
   script:
-    - cargo doc --document-private-items
+    - cargo doc --no-deps --document-private-items
   artifacts:
     paths:
       - target/doc
