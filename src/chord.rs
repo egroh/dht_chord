@@ -444,7 +444,7 @@ impl Chord {
 
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.is_responsible_for_key(key));
-        if self.state.max_storage_duration < ttl {
+        if self.state.max_storage_duration > ttl {
             self.state
                 .node_storage
                 .insert(key, (value, Utc::now() + ttl));

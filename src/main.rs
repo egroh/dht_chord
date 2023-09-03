@@ -85,23 +85,23 @@ impl P2pDht {
             .as_mut()
             .unwrap()
             .await
-            .expect("Did encounter error while awaiting termination of peer server thread");
+            .expect("Encountered error while awaiting termination of peer server thread");
 
         match self.api_server_thread.as_mut() {
             None => {}
             Some(api_thread) => {
                 api_thread
                     .await
-                    .expect("Did encounter error while awaiting termination of api server thread");
+                    .expect("Encountered error while awaiting termination of api server thread");
             }
         }
 
         match self.housekeeping_thread.as_mut() {
             None => {}
             Some(thread) => {
-                thread.await.expect(
-                    "Did encounter error while awaiting termination of housekeeping thread",
-                );
+                thread
+                    .await
+                    .expect("Encountered error while awaiting termination of housekeeping thread");
             }
         }
     }
