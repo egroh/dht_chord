@@ -86,7 +86,7 @@ pub struct DhtPut {
     /// How many copies of the value should be stored in the DHT
     pub(crate) replication: u8,
     /// Reserved for future use
-    pub(crate) reserved: u8,
+    pub(crate) _reserved: u8,
     /// Fixed size 256 bit key (we hash all keys into a 64 bit integer before storing them)
     pub(crate) key: [u8; 32],
     /// Value of arbitrary size
@@ -142,7 +142,7 @@ impl ApiPacket {
                         self.message = ApiPacketMessage::Put(DhtPut {
                             ttl,
                             replication,
-                            reserved,
+                            _reserved: reserved,
                             key: key.try_into().unwrap(),
                             value,
                         });

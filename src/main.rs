@@ -17,8 +17,8 @@ mod api_communication;
 mod chord;
 
 struct P2pDht {
-    default_store_duration: Duration,
-    max_store_duration: Duration,
+    default_storage_duration: Duration,
+    max_storage_duration: Duration,
     public_server_address: SocketAddr,
     api_address: SocketAddr,
     dht: Chord,
@@ -29,15 +29,21 @@ struct P2pDht {
 
 impl P2pDht {
     async fn new(
-        default_store_duration: Duration,
-        max_store_duration: Duration,
+        default_storage_duration: Duration,
+        max_storage_duration: Duration,
         public_server_address: SocketAddr,
         api_address: SocketAddr,
         initial_peer: Option<SocketAddr>,
         start_api_server: bool,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
-        let chord = Chord::new(initial_peer, public_server_address).await;
+        let chord = Chord::new(
+            initial_peer,
+            public_server_address,
+            default_storage_duration,
+            max_storage_duration,
+        )
+        .await;
         let peer_server_thread = Some(
             chord
                 .start_server_socket(public_server_address, cancellation_token.clone())
@@ -56,8 +62,8 @@ impl P2pDht {
         };
 
         P2pDht {
-            default_store_duration,
-            max_store_duration,
+            default_storage_duration,
+            max_storage_duration,
             public_server_address,
             api_address,
             dht: chord,

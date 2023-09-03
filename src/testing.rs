@@ -129,7 +129,7 @@ mod tests {
         let payload = api_communication::DhtPut {
             ttl: 0,
             replication: 0,
-            reserved: 0,
+            _reserved: 0,
             key,
             value: value.clone(),
         };
@@ -159,7 +159,7 @@ mod tests {
             DefaultOptions::new()
                 .with_fixint_encoding()
                 .with_big_endian()
-                .serialize(&payload.reserved)
+                .serialize(&payload._reserved)
                 .unwrap(),
         );
         buf.extend(payload.key);
@@ -231,7 +231,7 @@ mod tests {
             api_communication::DhtPut {
                 ttl: 0,
                 replication: 0,
-                reserved: 0,
+                _reserved: 0,
                 key,
                 value: value.clone(),
             },
@@ -286,7 +286,7 @@ mod tests {
                 api_communication::DhtPut {
                     ttl: 0,
                     replication: 0,
-                    reserved: 0,
+                    _reserved: 0,
                     key: *key,
                     value: value.clone(),
                 },
@@ -301,7 +301,7 @@ mod tests {
                 api_communication::DhtPut {
                     ttl: 0,
                     replication: 0,
-                    reserved: 0,
+                    _reserved: 0,
                     key: *key,
                     value: value.clone(),
                 },
@@ -340,7 +340,7 @@ mod tests {
                     api_communication::DhtPut {
                         ttl: 0,
                         replication: 0,
-                        reserved: 0,
+                        _reserved: 0,
                         key: *key,
                         value: value.clone(),
                     },
@@ -390,7 +390,7 @@ mod tests {
                     api_communication::DhtPut {
                         ttl: 0,
                         replication: 0,
-                        reserved: 0,
+                        _reserved: 0,
                         key: *key,
                         value: value.clone(),
                     },

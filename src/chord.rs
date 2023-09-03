@@ -89,14 +89,14 @@ struct SChordState {
     predecessors: RwLock<Vec<ChordPeer>>,
 
     /// The duration we store things per default
-    default_store_duration: Duration,
+    _default_storage_duration: Duration,
     /// The maximum duration for which we keep an item
     /// we have been tasked to store by the network in our [`node_storage`](SChordState::node_storage).
     /// Does not apply to [`personal_storage`](SChordState::personal_storage).
-    max_store_duration: Duration,
+    max_storage_duration: Duration,
 
     /// Something
-    default_replication_amount: usize,
+    default_replication_amount: u8,
 
     /// The personal storage keeps track of entries we have been asked to store by the local user.
     /// It is used as replication source by the housekeeping thread,
@@ -174,7 +174,12 @@ impl Chord {
         handle
     }
 
-    pub async fn new(initial_peer: Option<SocketAddr>, server_address: SocketAddr) -> Self {
+    pub async fn new(
+        initial_peer: Option<SocketAddr>,
+        server_address: SocketAddr,
+        default_storage_duration: Duration,
+        max_storage_duration: Duration,
+    ) -> Self {
         info!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
         server_address.hash(&mut hasher);
@@ -228,7 +233,7 @@ impl Chord {
                                     for (key, value) in new_keys {
                                         local_storage.insert(
                                             key,
-                                            (value, Utc::now() + Duration::from_secs(600)),
+                                            (value, Utc::now() + default_storage_duration),
                                         );
                                     }
 
@@ -280,8 +285,8 @@ impl Chord {
                         tx.send(PeerMessage::CloseConnection).await?;
                         Ok(Chord {
                             state: Arc::new(SChordState {
-                                default_store_duration: Duration::from_secs(60),
-                                max_store_duration: Duration::from_secs(600),
+                                _default_storage_duration: default_storage_duration,
+                                max_storage_duration,
                                 default_replication_amount: 4,
                                 personal_storage: Default::default(),
                                 node_storage: local_storage,
@@ -304,8 +309,8 @@ impl Chord {
         } else {
             Chord {
                 state: Arc::new(SChordState {
-                    default_store_duration: Duration::from_secs(60),
-                    max_store_duration: Duration::from_secs(600),
+                    _default_storage_duration: default_storage_duration,
+                    max_storage_duration,
                     default_replication_amount: 4,
                     personal_storage: Default::default(),
                     node_storage: DashMap::new(),
@@ -359,14 +364,14 @@ impl Chord {
 
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.is_responsible_for_key(key));
-        if self.state.max_store_duration < ttl {
+        if self.state.max_storage_duration < ttl {
             self.state
                 .node_storage
                 .insert(key, (value, Utc::now() + ttl));
         } else {
             self.state
                 .node_storage
-                .insert(key, (value, Utc::now() + self.state.max_store_duration));
+                .insert(key, (value, Utc::now() + self.state.max_storage_duration));
         }
         Ok(())
     }
