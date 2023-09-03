@@ -321,7 +321,7 @@ impl Chord {
             }
         } else {
             // Construct chord which is alone, i.e. no other nodes exists
-            let chord = Chord {
+            Chord {
                 state: Arc::new(ChordState {
                     default_storage_duration,
                     max_storage_duration,
@@ -340,8 +340,7 @@ impl Chord {
                     predecessors: RwLock::new(Vec::new()),
                     address: server_address,
                 }),
-            };
-            chord
+            }
         }
     }
 
@@ -359,6 +358,11 @@ impl Chord {
         })
     }
 
+    /// Performs the housekeeping which performs some periodic tasks
+    /// - Cleanup of expired values in `personal_storage` and `node_storage`
+    /// - Refresh keys with their replication on other nodes
+    /// - Stabilize to account for churn
+    /// - Update finger table to optimize routing
     async fn perform_housekeeping(&self, cancellation_token: CancellationToken) {
         while !cancellation_token.is_cancelled() {
             let sleep_target_time = Instant::now() + Duration::from_secs(60);
@@ -415,6 +419,15 @@ impl Chord {
                 warn!("Error during replication: {}", e);
             }
 
+            if let Err(e) = self.stabilize().await {
+                warn!("Error during stabilization: {}", e);
+            }
+
+            if let Err(e) = self.fix_fingers().await {
+                warn!("Error during fix_fingers: {}", e);
+            }
+
+            // Sleep until the previously set target
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     return;
@@ -648,16 +661,20 @@ impl Chord {
     /// in which case we contact the last reachable peer and set this node as successor and update
     /// our finger table accordingly
     pub(crate) async fn stabilize(&self) -> Result<()> {
+        if self.state.predecessors.read().is_empty() {
+            // If we have no predecessor, we are alone and there is nothing to stabilize
+            return Ok(());
+        }
+
         // fixing immediate predecessor
         loop {
-            let predecessors = self.state.predecessors.read();
-            if !predecessors.is_empty() {
-                break;
-            }
-            let predecessor = *predecessors.first().ok_or(anyhow!("No predecessor"))?;
-
-            // drop lock, as we made a copy
-            drop(predecessors);
+            let predecessor = {
+                let predecessors = self.state.predecessors.read();
+                if !predecessors.is_empty() {
+                    break;
+                }
+                *predecessors.first().ok_or(anyhow!("No predecessor"))?
+            };
 
             // Ask our predecessor for its successor which should be us
             match self.ask_for_successor(predecessor).await {
@@ -859,14 +876,18 @@ impl Chord {
     /// This ensures that all finger table entries point to the successor of 2^index where index is
     /// the index in the finger table
     pub(crate) async fn fix_fingers(&self) -> Result<()> {
+        if self.state.predecessors.read().is_empty() {
+            // If we have no predecessor, we are alone and there is nothing to stabilize
+            return Ok(());
+        }
+
         // Fix fingers
         for (i, entry) in self.state.finger_table.iter().enumerate() {
             // Check if the next entry is out of bounds
             if i + 1 >= self.state.finger_table.len() {
                 break;
             }
-            let finger = entry.read();
-
+            let finger = *entry.read();
             let next_finger_id = self.id_at_finger_index(i + 1);
 
             let (mut tx, mut rx) = connect_to_peer!(finger.address);
