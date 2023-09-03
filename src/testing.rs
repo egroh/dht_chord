@@ -37,6 +37,7 @@ mod tests {
                     Some(dhts[0].dht.get_address())
                 },
                 start_api_socket,
+                false,
             )
             .await;
 

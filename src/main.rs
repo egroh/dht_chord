@@ -24,6 +24,7 @@ struct P2pDht {
     dht: Chord,
     peer_server_thread: Option<JoinHandle<()>>,
     api_server_thread: Option<JoinHandle<()>>,
+    housekeeping_thread: Option<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
@@ -35,6 +36,7 @@ impl P2pDht {
         api_address: SocketAddr,
         initial_peer: Option<SocketAddr>,
         start_api_server: bool,
+        start_housekeeping: bool,
     ) -> Self {
         let cancellation_token = CancellationToken::new();
         let chord = Chord::new(
@@ -42,7 +44,6 @@ impl P2pDht {
             public_server_address,
             default_storage_duration,
             max_storage_duration,
-            cancellation_token.clone(),
         )
         .await;
         let peer_server_thread = Some(
@@ -61,6 +62,10 @@ impl P2pDht {
             ),
             false => None,
         };
+        let housekeeping_thread = match start_housekeeping {
+            true => Some(chord.start_housekeeping_thread(&cancellation_token).await),
+            false => None,
+        };
 
         P2pDht {
             default_storage_duration,
@@ -70,25 +75,38 @@ impl P2pDht {
             dht: chord,
             peer_server_thread,
             api_server_thread,
+            housekeeping_thread,
             cancellation_token,
         }
     }
 
     async fn await_termination(&mut self) {
-        match self.api_server_thread.as_mut() {
-            None => {}
-            Some(api_thread) => {
-                api_thread.await.expect("Unexpected error");
-            }
-        }
-
         self.peer_server_thread
             .as_mut()
             .unwrap()
             .await
-            .expect("Unexpected error");
+            .expect("Did encounter error while awaiting termination of peer server thread");
+
+        match self.api_server_thread.as_mut() {
+            None => {}
+            Some(api_thread) => {
+                api_thread
+                    .await
+                    .expect("Did encounter error while awaiting termination of api server thread");
+            }
+        }
+
+        match self.housekeeping_thread.as_mut() {
+            None => {}
+            Some(thread) => {
+                thread.await.expect(
+                    "Did encounter error while awaiting termination of housekeeping thread",
+                );
+            }
+        }
     }
 
+    #[cfg(test)]
     fn initiate_shutdown(&self) {
         self.cancellation_token.cancel();
     }
@@ -138,6 +156,7 @@ async fn create_dht_from_command_line_arguments() -> P2pDht {
         p2p_address,
         api_address,
         initial_peer,
+        true,
         true,
     )
     .await

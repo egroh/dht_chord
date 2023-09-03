@@ -109,8 +109,6 @@ struct SChordState {
     /// The node storage keeps track of entries that have been assigned to the local DHT node by the network.
     /// Once the stored DateTime is hit, the entry expires and is removed by the housekeeping thread.
     node_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>)>,
-
-    cancellation_token: CancellationToken,
 }
 
 impl Chord {
@@ -183,7 +181,6 @@ impl Chord {
         server_address: SocketAddr,
         default_storage_duration: Duration,
         max_storage_duration: Duration,
-        cancellation_token: CancellationToken,
     ) -> Self {
         info!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
@@ -299,15 +296,8 @@ impl Chord {
                                 node_id,
                                 predecessors: RwLock::new(predecessors),
                                 address: server_address,
-                                cancellation_token,
                             }),
                         };
-                        {
-                            let chord = chord.clone();
-                            tokio::spawn(async move {
-                                chord.housekeeping().await;
-                            });
-                        }
                         Ok(chord)
                     }
                     _ => Err(anyhow!("Unexpected response to get_node from initial peer")),
@@ -338,21 +328,25 @@ impl Chord {
                     node_id,
                     predecessors: RwLock::new(Vec::new()),
                     address: server_address,
-                    cancellation_token,
                 }),
             };
-            {
-                let chord = chord.clone();
-                tokio::spawn(async move {
-                    chord.housekeeping().await;
-                });
-            }
             chord
         }
     }
 
-    async fn housekeeping(&self) {
-        while !self.state.cancellation_token.is_cancelled() {
+    pub async fn start_housekeeping_thread(
+        &self,
+        cancellation_token: &CancellationToken,
+    ) -> JoinHandle<()> {
+        let chord = self.clone();
+        let cancellation_token = cancellation_token.clone();
+        tokio::spawn(async move {
+            chord.perform_housekeeping(cancellation_token).await;
+        })
+    }
+
+    async fn perform_housekeeping(&self, cancellation_token: CancellationToken) {
+        while !cancellation_token.is_cancelled() {
             let sleep_target_time = Instant::now() + Duration::from_secs(60);
 
             // Cleanup
@@ -401,7 +395,15 @@ impl Chord {
             if let Err(e) = replication_result().await {
                 warn!("Error during replication: {}", e);
             }
-            sleep_until(sleep_target_time).await;
+
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    return;
+                }
+                _ = sleep_until(sleep_target_time) => {
+                    // Do nothing, continue loop
+                }
+            }
         }
     }
 
