@@ -332,7 +332,6 @@ pub(crate) async fn start_api_server(
                                                 return Ok(());
                                             }
                                             ApiPacketMessage::Unparsed(_) => {}
-                                            _ => return Err("Unknown api package received".into()),
                                         }
                                     }
                                 }

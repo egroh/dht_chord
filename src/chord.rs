@@ -33,6 +33,7 @@
 //!     - Our housekeeping thread continuously refreshes values that have been stored in the DHT upon our own request
 //! # Security evaluation:
 
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
@@ -202,7 +203,7 @@ impl Chord {
                         tx.send(PeerMessage::CloseConnection).await?;
 
                         let mut predecessors = Vec::new();
-                        let mut local_storage = DashMap::new();
+                        let local_storage = DashMap::new();
 
                         // Connect to successor
                         let (mut tx, mut rx) = connect_to_peer!(successor.address);
@@ -286,7 +287,7 @@ impl Chord {
                         tx.send(PeerMessage::CloseConnection).await?;
                         let chord = Chord {
                             state: Arc::new(SChordState {
-                                default_storage_duration: default_storage_duration,
+                                default_storage_duration,
                                 max_storage_duration,
                                 default_replication_amount: 4,
                                 personal_storage: Default::default(),
@@ -464,7 +465,7 @@ impl Chord {
             {
                 debug!("Key {} found in node storage", key);
                 return Ok(value);
-            } else {
+            } else if !self.is_responsible_for_key(key) {
                 let peer = self.get_responsible_node(key).await?;
                 let (mut tx, mut rx) = connect_to_peer!(peer.address);
                 tx.send(PeerMessage::GetValue(key)).await?;
@@ -639,18 +640,10 @@ impl Chord {
         assert!(!self.state.predecessors.read().is_empty());
         // Add backup predecessors
         for i in 0..3 {
-            match self.stabilize_predecessor(i).await {
-                Ok(_) => {
-                    // Do nothing, method already did everything
-                }
-                Err(e) => {
-                    debug!("Encountered problem when contacting predecessor, assuming its no longer with us");
-
-                    self.state.predecessors.write().remove(i);
-
-                    // Abort loop, as we have to wait for the peer to stabilize itself and provide us with a contactable predecessor
-                    break;
-                }
+            if let Err(e) = self.stabilize_predecessor(i).await {
+                warn!("Encountered problem when contacting predecessor, assuming its no longer with us: {}", e);
+                self.state.predecessors.write().remove(i);
+                break;
             }
         }
 
@@ -1102,14 +1095,10 @@ impl Chord {
 }
 
 fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
-    if lower == upper {
-        return true;
-    } else if lower < upper {
-        // No wrap-around needed
-        value >= lower && value <= upper
-    } else {
-        // Wrap-around case
-        value >= lower || value <= upper
+    match lower.cmp(&upper) {
+        Ordering::Equal => true,
+        Ordering::Less => value >= lower && value <= upper,
+        Ordering::Greater => value >= lower || value <= upper, // Wrap-around
     }
 }
 
