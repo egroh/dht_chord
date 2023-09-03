@@ -41,6 +41,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use channels::serdes::Bincode;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
@@ -74,11 +75,6 @@ pub struct Chord {
 
 /// Structure containing all the state of chord
 struct SChordState {
-    /// The duration we store things per default
-    default_store_duration: Duration,
-    /// The maximum duration we store an item
-    max_store_duration: Duration,
-
     /// the identifier of this node on the key ring
     node_id: u64,
     /// the address where this node is reachable
@@ -92,12 +88,29 @@ struct SChordState {
     /// effects like the responsibility for keys
     predecessors: RwLock<Vec<ChordPeer>>,
 
-    /// hashtable storing all hash entries which this node is responsible for
-    local_storage: DashMap<u64, Vec<u8>>,
+    /// The duration we store things per default
+    default_store_duration: Duration,
+    /// The maximum duration for which we keep an item
+    /// we have been tasked to store by the network in our [`node_storage`](SChordState::node_storage).
+    /// Does not apply to [`personal_storage`](SChordState::personal_storage).
+    max_store_duration: Duration,
+
+    /// Something
+    default_replication_amount: usize,
+
+    /// The personal storage keeps track of entries we have been asked to store by the local user.
+    /// It is used as replication source by the housekeeping thread,
+    /// ensuring its contents are continuously re-spread across the network.
+    /// It maps a key to a tuple of the value, the expiration time and the replication amount.
+    /// It is also used as cache for fast local lookups.
+    personal_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>, u8)>, // Key, (Value, Expiration time, Replication Amount)
+    /// The node storage keeps track of entries that have been assigned to the local DHT node by the network.
+    /// Once the stored DateTime is hit, the entry expires and is removed by the housekeeping thread.
+    node_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>)>,
 }
 
 impl Chord {
-    /// Resturns the address on which this node is listening for incoming connections
+    /// Returns the address on which this node is listening for incoming connections
     #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
@@ -213,7 +226,10 @@ impl Chord {
                             match rx.recv().await? {
                                 PeerMessage::SplitResponse(SplitResponse::Success(new_keys)) => {
                                     for (key, value) in new_keys {
-                                        local_storage.insert(key, value);
+                                        local_storage.insert(
+                                            key,
+                                            (value, Utc::now() + Duration::from_secs(600)),
+                                        );
                                     }
 
                                     // Inform predecessor that we are his successor now
@@ -266,7 +282,9 @@ impl Chord {
                             state: Arc::new(SChordState {
                                 default_store_duration: Duration::from_secs(60),
                                 max_store_duration: Duration::from_secs(600),
-                                local_storage,
+                                default_replication_amount: 4,
+                                personal_storage: Default::default(),
+                                node_storage: local_storage,
                                 finger_table,
                                 node_id,
                                 predecessors: RwLock::new(predecessors),
@@ -288,7 +306,9 @@ impl Chord {
                 state: Arc::new(SChordState {
                     default_store_duration: Duration::from_secs(60),
                     max_store_duration: Duration::from_secs(600),
-                    local_storage: DashMap::new(),
+                    default_replication_amount: 4,
+                    personal_storage: Default::default(),
+                    node_storage: DashMap::new(),
                     finger_table: (0..64)
                         .map(|_| {
                             RwLock::new(ChordPeer {
@@ -305,54 +325,85 @@ impl Chord {
         }
     }
 
-    pub async fn insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
-        debug!("{} API storage insert key {}", self.state.address, key);
-        if self.is_responsible_for_key(key) {
-            debug!("Storing locally!");
-            self.internal_insert(key, value, ttl).await
-        } else {
-            let peer = self.get_responsible_node(key).await?;
-            debug!("Storing remotely! (on {})", peer.address);
-            let (mut tx, mut rx) = connect_to_peer!(peer.address);
-            tx.send(PeerMessage::InsertValue(key, value, ttl)).await?;
-            solve_proof_of_work(&mut tx, &mut rx).await?;
-            tx.send(PeerMessage::CloseConnection).await?;
-            Ok(())
+    pub async fn insert(
+        &self,
+        key: u64,
+        value: Vec<u8>,
+        ttl: Duration,
+        replication_amount: u8,
+    ) -> Result<()> {
+        debug!(
+            "{} received API storage request for key {}",
+            self.state.address, key
+        );
+        self.state
+            .personal_storage
+            .insert(key, (value.clone(), Utc::now() + ttl, replication_amount));
+        for i in 0..=replication_amount {
+            let key = calculate_hash(&(key + i as u64));
+            if self.is_responsible_for_key(key) {
+                debug!("Storing key {} locally!", key);
+                self.internal_insert(key, value.clone(), ttl).await?;
+            } else {
+                let peer = self.get_responsible_node(key).await?;
+                debug!("Storing key {} remotely! (on {})", key, peer.address);
+                let (mut tx, mut rx) = connect_to_peer!(peer.address);
+                tx.send(PeerMessage::InsertValue(key, value.clone(), ttl))
+                    .await?;
+                solve_proof_of_work(&mut tx, &mut rx).await?;
+                tx.send(PeerMessage::CloseConnection).await?;
+            }
         }
+        Ok(())
     }
 
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.is_responsible_for_key(key));
-        self.state.local_storage.insert(key, value);
+        if self.state.max_store_duration < ttl {
+            self.state
+                .node_storage
+                .insert(key, (value, Utc::now() + ttl));
+        } else {
+            self.state
+                .node_storage
+                .insert(key, (value, Utc::now() + self.state.max_store_duration));
+        }
         Ok(())
     }
 
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
-        debug!("Retrieving key {} from {}", key, self.state.address);
-        if self.is_responsible_for_key(key) {
-            self.state
-                .local_storage
+        debug!(
+            "{} received API get request for key {}",
+            self.state.address, key
+        );
+        if let Some(entry) = self.state.personal_storage.get(&key) {
+            debug!("Key {} found in personal storage", key);
+            return Ok((*entry.value().0).to_owned());
+        }
+        for i in 0..=self.state.default_replication_amount {
+            let key = calculate_hash(&(key + i as u64));
+            if let Some(value) = self
+                .state
+                .node_storage
                 .get(&key)
-                .map(|entry| entry.value().clone())
-                .ok_or(anyhow!(
-                    "Key {} not found locally on node {}",
-                    key,
-                    self.state.address
-                ))
-        } else {
-            let peer = self.get_responsible_node(key).await?;
-            let (mut tx, mut rx) = connect_to_peer!(peer.address);
-
-            tx.send(PeerMessage::GetValue(key)).await?;
-            solve_proof_of_work(&mut tx, &mut rx).await?;
-            match rx.recv().await? {
-                PeerMessage::GetValueResponse(option) => {
-                    tx.send(PeerMessage::CloseConnection).await?;
-                    option.ok_or(anyhow!("Peer does not know value"))
+                .map(|entry| entry.value().0.to_owned())
+            {
+                debug!("Key {} found in node storage", key);
+                return Ok(value);
+            } else {
+                let peer = self.get_responsible_node(key).await?;
+                let (mut tx, mut rx) = connect_to_peer!(peer.address);
+                tx.send(PeerMessage::GetValue(key)).await?;
+                solve_proof_of_work(&mut tx, &mut rx).await?;
+                let response = rx.recv().await?;
+                tx.send(PeerMessage::CloseConnection).await?;
+                if let PeerMessage::GetValueResponse(Some(value)) = response {
+                    debug!("Key {} found on peer {}", key, peer.address);
+                    return Ok(value);
                 }
-                _ => Err(anyhow!("Wrong response")),
             }
         }
+        Err(anyhow!("Key not found"))
     }
 
     fn is_responsible_for_key(&self, key: u64) -> bool {
@@ -796,9 +847,9 @@ impl Chord {
                     require_proof_of_work(&mut tx, &mut rx, 1).await?;
                     let value = self
                         .state
-                        .local_storage
+                        .node_storage
                         .get(&key)
-                        .map(|entry| entry.value().clone());
+                        .map(|entry| entry.value().0.clone());
                     tx.send(PeerMessage::GetValueResponse(value)).await?;
                 }
                 PeerMessage::GetPredecessor => {
@@ -853,11 +904,11 @@ impl Chord {
 
                     if is_between_on_ring(new_peer.id, predecessor.id, self.state.node_id) {
                         let mut values = Vec::new();
-                        for entry in self.state.local_storage.iter() {
+                        for entry in self.state.node_storage.iter() {
                             let key = *entry.key();
                             let value = entry.value();
                             if is_between_on_ring(key, predecessor.id, new_peer.id) {
-                                values.push((key, value.clone()));
+                                values.push((key, value.0.clone()));
                             }
                         }
                         tx.send(PeerMessage::SplitResponse(SplitResponse::Success(values)))
@@ -965,7 +1016,7 @@ impl Chord {
             self.state.predecessors.read()[0].id
         );
         debug!("Stored values:");
-        for (key, value) in self.state.local_storage.clone() {
+        for (key, value) in self.state.node_storage.clone() {
             debug!("  {:x}: {:?}", key, value);
         }
         debug!("Finger table:");
@@ -1032,6 +1083,12 @@ async fn solve_proof_of_work(
     );
     tx.send(PeerMessage::ProofOfWorkResponse(response)).await?;
     Ok(())
+}
+
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
 }
 
 #[test]

@@ -190,7 +190,12 @@ pub(crate) fn hash_key_bytes(vec_bytes: &[u8]) -> u64 {
 pub(crate) async fn process_api_put_request(dht: Chord, put: DhtPut) {
     let hashed_key = hash_key_bytes(&put.key);
     if let Err(e) = dht
-        .insert(hashed_key, put.value, Duration::from_secs(put.ttl as u64))
+        .insert(
+            hashed_key,
+            put.value,
+            Duration::from_secs(put.ttl as u64),
+            put.replication,
+        )
         .await
     {
         warn!("Error inserting key {:?} into DHT: {}", &put.key, e);
