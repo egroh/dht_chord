@@ -6,14 +6,23 @@ use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sha3::Sha3_512;
 
+/// Uniquely identifies a peer in our network
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
 pub struct ChordPeer {
+    /// Node-ID of the peer (currently a hash of the address a peer announces itself with)
     pub(crate) id: u64,
+    /// Address under which we can reach the peer
     pub(crate) address: SocketAddr,
 }
 
+/// All communication messages sent between peers
+///
+/// The enum itself is serialized and deserialized through [channels](https://docs.rs/channels/0.10.0/channels/).
+/// The exact protocol specification can be found [here](https://github.com/threadexio/channels-rs/blob/master/spec/PROTOCOL.md).
+///
+/// Internally, we just match the enum variants and perform the corresponding actions.
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) enum PeerMessage {
+pub enum PeerMessage {
     GetNode(u64),
     GetNodeResponse(ChordPeer),
     GetValue(u64),
@@ -31,25 +40,25 @@ pub(crate) enum PeerMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) enum SplitResponse {
+pub enum SplitResponse {
     Success(Vec<(u64, Vec<u8>)>),
     Failure(ChordPeer), // Predecessor that is responsible instead
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
-pub(crate) struct ProofOfWorkChallenge {
+pub struct ProofOfWorkChallenge {
     nonce: u128,
     pub(crate) difficulty: usize,
 }
 
 impl ProofOfWorkChallenge {
-    pub(crate) fn new(difficulty: usize) -> Self {
+    pub fn new(difficulty: usize) -> Self {
         Self {
             nonce: random(),
             difficulty,
         }
     }
-    pub(crate) fn solve(&self) -> ProofOfWorkResponse {
+    pub fn solve(&self) -> ProofOfWorkResponse {
         let mut hasher = Sha3_512::new();
         hasher.update(self.nonce.to_le_bytes());
 
@@ -71,7 +80,7 @@ impl ProofOfWorkChallenge {
         }
     }
 
-    pub(crate) fn check(&self, response: ProofOfWorkResponse) -> bool {
+    pub fn check(&self, response: ProofOfWorkResponse) -> bool {
         let mut hasher = Sha3_512::new();
         hasher.update(self.nonce.to_le_bytes());
         hasher.update(response.solution.to_le_bytes());
@@ -85,7 +94,7 @@ impl ProofOfWorkChallenge {
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone)]
-pub(crate) struct ProofOfWorkResponse {
+pub struct ProofOfWorkResponse {
     solution: u128,
 }
 

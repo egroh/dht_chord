@@ -26,9 +26,9 @@
 //! p2p_address = 127.0.0.1:8001 ; Address to listen on for P2P connections
 //! api_address = 127.0.0.1:7401 ; Address to listen on for API connections
 //! ```
-//! So to run our program after following the compile steps below, you may use the below command to start:
+//! So to run our program, you may use:
 //! ```bash
-//! target/release/p2p_dht -c config.ini
+//! p2p_dht -c config.ini
 //! ```
 //! We support different levels of logging, with the default being `info`.
 //! You can change the log level by setting the `RUST_LOG` environment variable to one of the following values:
@@ -61,11 +61,14 @@
 //! ```bash
 //! cargo test --release
 //! ```
-//! # Crate layout:
 //!
-//! Our implementation is split into two core modules:
-//! - [`api_communication`]
-//! - [`chord`]
+//! # How to read this documentation:
+//! Our documentation follows a "docs as code" approach,
+//! and is generated directly out of our source code.
+//! Whenever you see a module, struct or function or any other clickable link in this documentation,
+//! you can use it to directly jump to description and explanation of the corresponding code.
+//!
+//! Below, you will find links to modules of this crate:
 #![doc(html_favicon_url = "https://www.net.in.tum.de/favicon.ico")]
 #![doc(html_logo_url = "https://net.in.tum.de/Images/tum-logo-5d7bd62d.svg")]
 pub mod api_communication;

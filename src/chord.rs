@@ -1,6 +1,5 @@
-//! Black box implementation of a distributed hash table
+//! Implementation of a distributed hash table based on [Chord](https://en.wikipedia.org/wiki/Chord_(peer-to-peer))
 //!
-//! We have designed this module as stand-alone [Chord](https://en.wikipedia.org/wiki/Chord_(peer-to-peer)) implementation.
 //! It can operate independently from the API module and is usable as a stand-alone crate.
 //!
 //! # Features:
@@ -28,10 +27,12 @@
 //!     - This could be easily adjusted to only hash IPs,
 //!     providing limited [sybil defense](https://en.wikipedia.org/wiki/Sybil_attack)
 //!     - In case of IPv6, we could only hash a masked version of the IP
-//!     - We have currently not implemented these,
+//!     - We have currently not implemented this,
 //!     as it would interfere with development and testing
 //! - Limited defence against nodes refusing to store values or disconnecting
 //!     - Our housekeeping thread continuously refreshes values that have been stored in the DHT upon our own request
+//!
+//! # Security evaluation: // todo
 //! - The inherent structure of the overlay offers some limited defense against id mapping attacks
 //!     - It is not easily possible to fool the peers around the intimidated identity, as they are already in direct contact
 //!     - Other nodes usually try to route requests as fast as possible into proximity of the intimidated identity
@@ -41,7 +42,6 @@
 //!  - Storage and Retrieval attacks are partially mitigated by built in replication
 //!  - Inconsistent behaviour also partially mitigated by built in replication
 //!  - DoS Attacks such as content pollution and index poisoning are resistet by PoW for insertion of values
-//! # Security evaluation:
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
