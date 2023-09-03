@@ -109,6 +109,8 @@ struct SChordState {
     /// The node storage keeps track of entries that have been assigned to the local DHT node by the network.
     /// Once the stored DateTime is hit, the entry expires and is removed by the housekeeping thread.
     node_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>)>,
+
+    cancellation_token: CancellationToken,
 }
 
 impl Chord {
@@ -181,6 +183,7 @@ impl Chord {
         server_address: SocketAddr,
         default_storage_duration: Duration,
         max_storage_duration: Duration,
+        cancellation_token: CancellationToken,
     ) -> Self {
         info!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
@@ -296,6 +299,7 @@ impl Chord {
                                 node_id,
                                 predecessors: RwLock::new(predecessors),
                                 address: server_address,
+                                cancellation_token,
                             }),
                         };
                         {
@@ -334,6 +338,7 @@ impl Chord {
                     node_id,
                     predecessors: RwLock::new(Vec::new()),
                     address: server_address,
+                    cancellation_token,
                 }),
             };
             {
@@ -346,8 +351,8 @@ impl Chord {
         }
     }
 
-    async fn housekeeping(&self) -> ! {
-        loop {
+    async fn housekeeping(&self) {
+        while !self.state.cancellation_token.is_cancelled() {
             let sleep_target_time = Instant::now() + Duration::from_secs(60);
 
             // Cleanup

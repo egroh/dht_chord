@@ -42,6 +42,7 @@ impl P2pDht {
             public_server_address,
             default_storage_duration,
             max_storage_duration,
+            cancellation_token.clone(),
         )
         .await;
         let peer_server_thread = Some(
