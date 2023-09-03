@@ -41,7 +41,30 @@
 //!  - Stabilization method, which regularly checks the health of peers in neighborhood and fixes the overlay if necessary
 //!  - Storage and Retrieval attacks are partially mitigated by built in replication
 //!  - Inconsistent behaviour also partially mitigated by built in replication
-//!  - DoS Attacks such as content pollution and index poisoning are resistet by PoW for insertion of values
+//!  - DoS Attacks such as content pollution and index poisoning are hardened against by PoW for insertion of values
+//!
+//! # Future Work
+//!
+//! ## improve Sybil defence
+//!     - It would likely sensible to introduce further hardware such as bandwidth(with respective scanners)
+//!     - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
+//!     - This would also help with other attacks
+//!
+//! ## Misbehaviour defence
+//! Currently only crash faults are dealt with. Malicious faults will go undetected.
+//! Local nodes could determine if a peer is misbehaving and exclude it from the overlay.
+//! However peers know their neighbors and could therefore act differently to different peers.
+//! Defending against such behaviour is hard, as for example a reporting system or similarly can
+//! be abused by malicious peers to get "good" nodes excluded from the network.
+//!
+//! ## Better Stabilize
+//! Stabilize in its current form relies on each node to realize that a peer disconnected from the network
+//! This sometimes incorrectly invalidates `SetPredecessor` and `SetSuccessor` Requests, as they are
+//! denied on the grounds that the receiving node does not know yet that its current successor/predecessor
+//! no longer exists
+//!
+//! # Work Distribution
+//! # Effort Spend
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
