@@ -49,6 +49,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{sleep_until, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::chord::peer_messages::{ChordPeer, PeerMessage, ProofOfWorkChallenge, SplitResponse};
@@ -89,7 +90,7 @@ struct SChordState {
     predecessors: RwLock<Vec<ChordPeer>>,
 
     /// The duration we store things per default
-    _default_storage_duration: Duration,
+    default_storage_duration: Duration,
     /// The maximum duration for which we keep an item
     /// we have been tasked to store by the network in our [`node_storage`](SChordState::node_storage).
     /// Does not apply to [`personal_storage`](SChordState::personal_storage).
@@ -283,9 +284,9 @@ impl Chord {
                         // todo: stabilize
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
-                        Ok(Chord {
+                        let chord = Chord {
                             state: Arc::new(SChordState {
-                                _default_storage_duration: default_storage_duration,
+                                default_storage_duration: default_storage_duration,
                                 max_storage_duration,
                                 default_replication_amount: 4,
                                 personal_storage: Default::default(),
@@ -295,7 +296,14 @@ impl Chord {
                                 predecessors: RwLock::new(predecessors),
                                 address: server_address,
                             }),
-                        })
+                        };
+                        {
+                            let chord = chord.clone();
+                            tokio::spawn(async move {
+                                chord.housekeeping().await;
+                            });
+                        }
+                        Ok(chord)
                     }
                     _ => Err(anyhow!("Unexpected response to get_node from initial peer")),
                 }
@@ -307,9 +315,9 @@ impl Chord {
                 }
             }
         } else {
-            Chord {
+            let chord = Chord {
                 state: Arc::new(SChordState {
-                    _default_storage_duration: default_storage_duration,
+                    default_storage_duration,
                     max_storage_duration,
                     default_replication_amount: 4,
                     personal_storage: Default::default(),
@@ -326,7 +334,68 @@ impl Chord {
                     predecessors: RwLock::new(Vec::new()),
                     address: server_address,
                 }),
+            };
+            {
+                let chord = chord.clone();
+                tokio::spawn(async move {
+                    chord.housekeeping().await;
+                });
             }
+            chord
+        }
+    }
+
+    async fn housekeeping(&self) -> ! {
+        loop {
+            let sleep_target_time = Instant::now() + Duration::from_secs(60);
+
+            // Cleanup
+            self.state
+                .personal_storage
+                .iter()
+                .filter(|entry| entry.value().1 < Utc::now())
+                .for_each(|entry| {
+                    debug!("Removing expired key {} from personal storage", entry.key());
+                    self.state.personal_storage.remove(entry.key());
+                });
+            self.state
+                .node_storage
+                .iter()
+                .filter(|entry| entry.value().1 < Utc::now())
+                .for_each(|entry| {
+                    debug!("Removing expired key {} from node storage", entry.key());
+                    self.state.node_storage.remove(entry.key());
+                });
+
+            // Replication
+            let replication_result = async || -> Result<()> {
+                for entry in self.state.personal_storage.iter() {
+                    for i in 0..=entry.value().2 {
+                        let key = calculate_hash(&(entry.key() + i as u64));
+                        let ttl = (entry.value().1 - Utc::now())
+                            .to_std()
+                            .unwrap_or(self.state.default_storage_duration);
+                        if self.is_responsible_for_key(key) {
+                            debug!("Storing key {} locally!", key);
+                            self.internal_insert(key, entry.value().0.clone(), ttl)
+                                .await?;
+                        } else {
+                            let peer = self.get_responsible_node(key).await?;
+                            debug!("Storing key {} remotely! (on {})", key, peer.address);
+                            let (mut tx, mut rx) = connect_to_peer!(peer.address);
+                            tx.send(PeerMessage::InsertValue(key, entry.value().0.clone(), ttl))
+                                .await?;
+                            solve_proof_of_work(&mut tx, &mut rx).await?;
+                            tx.send(PeerMessage::CloseConnection).await?;
+                        }
+                    }
+                }
+                Ok(())
+            };
+            if let Err(e) = replication_result().await {
+                warn!("Error during replication: {}", e);
+            }
+            sleep_until(sleep_target_time).await;
         }
     }
 
