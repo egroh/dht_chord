@@ -26,9 +26,9 @@
 //! p2p_address = 127.0.0.1:8001 ; Address to listen on for P2P connections
 //! api_address = 127.0.0.1:7401 ; Address to listen on for API connections
 //! ```
-//! So to run our program, you may use:
+//! So to run our program after following the compile steps below, you may use the below command to start:
 //! ```bash
-//! p2p_dht -c /path_to/config.ini
+//! target/release/p2p_dht -c config.ini
 //! ```
 //! We support different levels of logging, with the default being `info`.
 //! You can change the log level by setting the `RUST_LOG` environment variable to one of the following values:

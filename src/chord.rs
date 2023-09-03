@@ -90,14 +90,14 @@ struct ChordState {
     /// effects like the responsibility for keys
     predecessors: RwLock<Vec<ChordPeer>>,
 
-    /// The duration we store things per default
+    /// The duration entries are stored in the dht
     default_storage_duration: Duration,
     /// The maximum duration for which we keep an item
     /// we have been tasked to store by the network in our [`node_storage`](ChordState::node_storage).
     /// Does not apply to [`personal_storage`](ChordState::personal_storage).
     max_storage_duration: Duration,
 
-    /// Something
+    /// The default amount of replications which are done for each entry
     default_replication_amount: u8,
 
     /// The personal storage keeps track of entries we have been asked to store by the local user.
@@ -112,15 +112,11 @@ struct ChordState {
 }
 
 impl Chord {
-    /// Returns the address on which this node is listening for incoming connections
-    #[cfg(test)]
-    pub(crate) fn get_address(&self) -> SocketAddr {
-        self.state.address
-    }
-
     /// Method starting the server socket to accept request from other peers
     ///
     /// This method needs to be called after construction of the `Chord` struct
+    ///
+    /// The cancellation token given, allows to stop the and shutdown the listener
     ///
     /// # Arguments
     ///
@@ -175,6 +171,16 @@ impl Chord {
         handle
     }
 
+    /// Construct new instance of chord.
+    ///
+    /// If no initial peer is provided, it is assumed that this node is the only node present.
+    ///
+    /// Otherwise the initial peer is contacted, the successor and predecessor of this node is determined
+    /// and automatically contacted to transfer the entries this node is responsible for and adjust
+    /// the overlay to include this node.
+    ///
+    /// The finger table will be all be initialized to point to the successor, as they will be adjusted
+    /// with the next periodic housekeeping
     pub async fn new(
         initial_peer: Option<SocketAddr>,
         server_address: SocketAddr,
@@ -238,7 +244,6 @@ impl Chord {
                                     }
 
                                     // Inform predecessor that we are his successor now
-                                    // todo maybe fix race condition that predecessor may expect us to answer queries but server socket is not yet started
                                     let (mut tx, mut rx) =
                                         connect_to_peer!(predecessors[0].address);
                                     tx.send(PeerMessage::SetSuccessor(ChordPeer {
@@ -247,9 +252,6 @@ impl Chord {
                                     }))
                                     .await?;
                                     solve_proof_of_work(&mut tx, &mut rx).await?;
-
-                                    // todo maybe await response?
-
                                     break;
                                 }
                                 PeerMessage::SplitResponse(SplitResponse::Failure(
@@ -308,6 +310,7 @@ impl Chord {
                 }
             }
         } else {
+            // Construct chord which is alone, i.e. no other nodes exists
             let chord = Chord {
                 state: Arc::new(ChordState {
                     default_storage_duration,
@@ -332,6 +335,9 @@ impl Chord {
         }
     }
 
+    /// Method to start the housekeeping thread
+    ///
+    /// This thread will stop when the cancellation token is cancelled
     pub async fn start_housekeeping_thread(
         &self,
         cancellation_token: &CancellationToken,
@@ -410,6 +416,10 @@ impl Chord {
         }
     }
 
+    /// Inserts the value in the network
+    ///
+    /// It will automatically also insert the replications of the entry and keep track of the ttl
+    /// to refresh the value and its replications if necessary
     pub async fn insert(
         &self,
         key: u64,
@@ -442,6 +452,8 @@ impl Chord {
         Ok(())
     }
 
+    /// Inserts the entry into the [`node_storage`](ChordState::node_storage) with the correct time
+    /// when the entry will be expired
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.is_responsible_for_key(key));
         if self.state.max_storage_duration > ttl {
@@ -456,6 +468,12 @@ impl Chord {
         Ok(())
     }
 
+    /// Returns the value corresponding to the key, if it can be found in the whole network
+    ///
+    /// If this value is not findable or an error occurred while trying to find the value,
+    /// this error is returned
+    ///
+    /// This method blocks until the result has been determined
     pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
         debug!(
             "{} received API get request for key {}",
@@ -491,6 +509,10 @@ impl Chord {
         Err(anyhow!("Key not found"))
     }
 
+    /// Returns if this node is responsible for the given key.
+    ///
+    /// This is the case if the key lies between us (inclusive) and our predecessor (exclusive)
+    /// or no predecessor is currently known in which case this method always returns true
     fn is_responsible_for_key(&self, key: u64) -> bool {
         if let Some(predecessor) = self.state.predecessors.read().first() {
             is_between_on_ring(key, predecessor.id, self.state.node_id)
@@ -499,6 +521,10 @@ impl Chord {
         }
     }
 
+    /// Returns the [`ChordPeer`] responsible for the given key, or an error otherwise.
+    ///
+    /// This method will attempt to find suitable peer to ask about the responsible peer
+    /// in the finger table and contact it
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         // This method should never be called when we are responsible for this key
         debug_assert!(!self.is_responsible_for_key(key));
@@ -593,6 +619,24 @@ impl Chord {
         }
     }
 
+    /// Stabilized this node
+    ///
+    /// Firstly this method will contact the predecessor:
+    /// - If the predecessor is reachable it will check that this node and the predecessor are in
+    /// agreement that there is no node between them, if there is we set that node as predecessor
+    /// - If the predecessor is not reachable we will iteratively contact predecessors until one is
+    /// found which is alive. We send this predecessor the message that we are his successor.
+    ///
+    /// Once the predecessor has been stabilized, three more predecessors are recursively acquired
+    /// in case the immediate predecessor is no longer reachable
+    ///
+    /// Secondly the successor is contacted, which is identical with the first entry in the finger table.
+    /// - If the successor is reachable, agreement is ensured that no node is inbetween or correct the overlay
+    /// - If the successor is not reachable, the next furthers unique peer in the finger table is found
+    /// and contacted.
+    /// - This peer is then iteratively updated until we either found this node or an unreachable peer
+    /// in which case we contact the last reachable peer and set this node as successor and update
+    /// our finger table accordingly
     pub(crate) async fn stabilize(&self) -> Result<()> {
         // fixing immediate predecessor
         loop {
@@ -623,7 +667,6 @@ impl Chord {
                         } else {
                             debug!("{}: Predecessor does not know us", self.state.address);
                             // Send predecessor that we are his successor
-
                             let (mut tx, mut rx) = connect_to_peer!(predecessor.address);
                             tx.send(PeerMessage::SetSuccessor(self.as_chord_peer()))
                                 .await?;
@@ -696,7 +739,7 @@ impl Chord {
                             *entry.write() = successor;
                         }
                     }
-                    self.assert_finger_table_not_contain_self();
+                    self.assert_finger_table_invariants_correct();
 
                     // Finished nothing more to do
                     return Ok(());
@@ -711,54 +754,45 @@ impl Chord {
         Err(anyhow!("Did not find any contactable node in finger table"))
     }
 
-    pub(crate) async fn fix_fingers(&self) -> Result<()> {
-        // Fix fingers
-        for (i, entry) in self.state.finger_table.iter().enumerate() {
-            // Check if the next entry is out of bounds
-            if i + 1 >= self.state.finger_table.len() {
-                break;
+    /// This method attempts to contact the predecessor at the given index.
+    /// If this predecessor is not reachable, or any other issue occurs an error is returned
+    ///
+    /// If this connection is successful the predecessor list is modified accordingly
+    async fn stabilize_predecessor(&self, predecessor_index: usize) -> Result<()> {
+        let some_predecessor = self.state.predecessors.read()[predecessor_index];
+
+        let (mut tx, mut rx) = connect_to_peer!(some_predecessor.address);
+        // Ask the selected predecessor for its predecessor
+        tx.send(PeerMessage::GetPredecessor).await?;
+        solve_proof_of_work(&mut tx, &mut rx).await?;
+        match rx.recv().await? {
+            PeerMessage::GetPredecessorResponse(preceding_predecessor) => {
+                tx.send(PeerMessage::CloseConnection).await?;
+
+                // Insert predecessor into list, if the predecessors before fail
+                let mut write_predecessors = self.state.predecessors.write();
+                if write_predecessors.len() > predecessor_index + 1
+                    && write_predecessors[predecessor_index + 1].address
+                        != preceding_predecessor.address
+                {
+                    write_predecessors.insert(predecessor_index + 1, preceding_predecessor);
+                } else {
+                    write_predecessors.push(preceding_predecessor);
+                }
+                Ok(())
             }
-            let finger = entry.read();
-
-            let next_finger = self.state.node_id.wrapping_add(2u64.pow((i + 1) as u32));
-
-            let (mut tx, mut rx) = connect_to_peer!(finger.address);
-            // Ask the finger, for the next finger
-            tx.send(PeerMessage::GetNode(next_finger)).await?;
-            solve_proof_of_work(&mut tx, &mut rx).await?;
-
-            /*
-                        debug!(
-                            "{} Stabilizing finger {} add {:x} to id {:x}",
-                            self.state.address,
-                            i + 1,
-                            2u64.pow((i + 1) as u32),
-                            next_finger,
-                        );
-            */
-
-            match rx.recv().await? {
-                PeerMessage::GetNodeResponse(peer) => {
-                    // Set response as next finger
-                    *self.state.finger_table[i + 1].write() = peer;
-                    tx.send(PeerMessage::CloseConnection).await?;
-                }
-                _ => {
-                    tx.send(PeerMessage::CloseConnection).await?;
-                    return Err(anyhow!("Node answered unexpected message"));
-                }
+            _ => {
+                tx.send(PeerMessage::CloseConnection).await?;
+                Err(anyhow!("Node answered unexpected message"))
             }
         }
-
-        Ok(())
     }
 
-    fn as_chord_peer(&self) -> ChordPeer {
-        ChordPeer {
-            id: self.state.node_id,
-            address: self.state.address,
-        }
-    }
+    /// This method attempts to contact the given possible successor.
+    /// If this successor is not reachable, or any other issue occurs an error is returned
+    ///
+    /// If the successor is reachable, this method will also iteratively find any reachable
+    /// predecessor of the successor, to arrive at the last reachable successor before this node
     async fn stabilize_successor(&self, possible_successor: ChordPeer) -> Result<ChordPeer> {
         let mut closest_reachable_successor = possible_successor;
         let mut next_possible_successor = closest_reachable_successor;
@@ -809,38 +843,55 @@ impl Chord {
         tx_suc.send(PeerMessage::CloseConnection).await?;
         Ok(closest_reachable_successor)
     }
-    async fn stabilize_predecessor(&self, predecessor_index: usize) -> Result<()> {
-        let some_predecessor = self.state.predecessors.read()[predecessor_index];
 
-        let (mut tx, mut rx) = connect_to_peer!(some_predecessor.address);
-        // Ask the selected predecessor for its predecessor
-        tx.send(PeerMessage::GetPredecessor).await?;
-        solve_proof_of_work(&mut tx, &mut rx).await?;
-        match rx.recv().await? {
-            PeerMessage::GetPredecessorResponse(preceding_predecessor) => {
-                tx.send(PeerMessage::CloseConnection).await?;
+    /// Iterates through all finger table entries and asks the previous entry about the peer in the next entry
+    ///
+    /// This ensures that all finger table entries point to the successor of 2^index where index is
+    /// the index in the finger table
+    pub(crate) async fn fix_fingers(&self) -> Result<()> {
+        // Fix fingers
+        for (i, entry) in self.state.finger_table.iter().enumerate() {
+            // Check if the next entry is out of bounds
+            if i + 1 >= self.state.finger_table.len() {
+                break;
+            }
+            let finger = entry.read();
 
-                // Insert predecessor into list, if the predecessors before fail
-                let mut write_predecessors = self.state.predecessors.write();
-                if write_predecessors.len() > predecessor_index + 1
-                    && write_predecessors[predecessor_index + 1].address
-                        != preceding_predecessor.address
-                {
-                    write_predecessors.insert(predecessor_index + 1, preceding_predecessor);
-                } else {
-                    write_predecessors.push(preceding_predecessor);
+            let next_finger_id = self.id_at_finger_index(i + 1);
+
+            let (mut tx, mut rx) = connect_to_peer!(finger.address);
+            // Ask the finger, for the next finger
+            tx.send(PeerMessage::GetNode(next_finger_id)).await?;
+            solve_proof_of_work(&mut tx, &mut rx).await?;
+
+            match rx.recv().await? {
+                PeerMessage::GetNodeResponse(peer) => {
+                    // Set response as next finger
+                    *self.state.finger_table[i + 1].write() = peer;
+                    tx.send(PeerMessage::CloseConnection).await?;
                 }
-                Ok(())
+                _ => {
+                    tx.send(PeerMessage::CloseConnection).await?;
+                    return Err(anyhow!("Node answered unexpected message"));
+                }
             }
-            _ => {
-                tx.send(PeerMessage::CloseConnection).await?;
-                Err(anyhow!("Node answered unexpected message"))
-            }
+        }
+
+        self.assert_finger_table_invariants_correct();
+
+        Ok(())
+    }
+
+    /// Returns a cord peer representing this node, useful for peer communication
+    fn as_chord_peer(&self) -> ChordPeer {
+        ChordPeer {
+            id: self.state.node_id,
+            address: self.state.address,
         }
     }
 
     /// Returns a result with the predecessor of `node_to_ask`.
-    /// If the provided peer is not reachabe an error is returned
+    /// If the provided peer is not reachable an error is returned
     ///
     ///
     /// # Arguments
@@ -863,6 +914,14 @@ impl Chord {
             }
         }
     }
+
+    /// Returns a result with the successor of `node_to_ask`.
+    /// If the provided peer is not reachable an error is returned
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `node_to_ask` - the node to ask for its predecessor
     async fn ask_for_successor(&self, node_to_ask: ChordPeer) -> Result<ChordPeer> {
         let (mut tx, mut rx) = connect_to_peer!(node_to_ask.address);
         // Add one to the id we ask for, as the successor is responsible for this key
@@ -882,19 +941,25 @@ impl Chord {
         }
     }
 
+    /// Returns the address on which this node is listening for incoming connections
+    #[cfg(test)]
+    pub(crate) fn get_address(&self) -> SocketAddr {
+        self.state.address
+    }
+
+    /// Returns the predecessor of this node
+    ///
+    /// If no predecessor is present, it returns this node as [`ChordPeer`]
     fn get_predecessor(&self) -> ChordPeer {
         *self
             .state
             .predecessors
             .read()
             .first()
-            .unwrap_or(&ChordPeer {
-                id: self.state.node_id,
-                address: self.state.address,
-            })
+            .unwrap_or(&self.as_chord_peer())
     }
 
-    /// Handle incoming requests from peers
+    /// Handle incoming request from peer. Called by the peer server thread
     async fn accept_peer_connection(&self, mut stream: TcpStream) -> Result<()> {
         let (reader, writer) = stream.split();
         let (mut tx, mut rx) = channels::channel(reader, writer);
@@ -939,7 +1004,7 @@ impl Chord {
                     require_proof_of_work(&mut tx, &mut rx, 2).await?;
                     debug!("{}: Split pred: {}", self.state.address, new_peer.address);
                     let predecessor = {
-                        // Aquire write lock for predecessors
+                        // Acquire write lock for predecessors
                         let mut predecessors = self.state.predecessors.write();
 
                         // Get first predecessor, and if not present ourselves
@@ -970,7 +1035,7 @@ impl Chord {
                                         *entry = new_peer;
                                     }
                                 }
-                                self.assert_finger_table_not_contain_self();
+                                self.assert_finger_table_invariants_correct();
                             }
 
                             // insert as new predecessor
@@ -1013,7 +1078,7 @@ impl Chord {
                     // We update all entries which should now point to our successor
                     for (i, entry) in self.state.finger_table.iter().enumerate() {
                         if is_between_on_ring(
-                            self.state.node_id.wrapping_add(2u64.pow(i as u32)),
+                            self.id_at_finger_index(i),
                             self.state.node_id,
                             successor.id,
                         ) {
@@ -1024,7 +1089,7 @@ impl Chord {
                             break;
                         }
                     }
-                    self.assert_finger_table_not_contain_self();
+                    self.assert_finger_table_invariants_correct();
                     // todo maybe send answer
                     return Ok(());
                 }
@@ -1069,16 +1134,26 @@ impl Chord {
         }
     }
 
-    fn assert_finger_table_not_contain_self(&self) {
+    /// Returns the id which is 2^index after this node
+    fn id_at_finger_index(&self, index: usize) -> u64 {
+        self.state.node_id.wrapping_add(2u64.pow(index as u32))
+    }
+
+    /// Simple assert method which asserts that the node does not contain itself in the finger table
+    ///
+    /// If the node would contain itself, there is a possibility for endless routing loops
+    fn assert_finger_table_invariants_correct(&self) {
         for (i, entry) in self.state.finger_table.iter().enumerate() {
             // Checks if the routing table contains ourselves, which should never be the case
-            if entry.read().id == self.state.node_id {
-                error!("Invalid entry at index {}", i);
+            let finger = entry.read();
+            if finger.id == self.state.node_id {
+                error!("Found self in finger table at index {}", i);
                 panic!("Reached invalid state");
             }
         }
     }
 
+    /// Displays this node for debugging purposes
     #[cfg(test)]
     pub(crate) fn print_chord(&self) {
         debug!("{}  {:x}", self.state.address, self.state.node_id);
@@ -1104,6 +1179,9 @@ impl Chord {
     }
 }
 
+/// Returns true if the value is between lower and upper on a ring, i.e. with wrap around
+///
+/// Note this always returns true if lower is equals to upper
 fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     match lower.cmp(&upper) {
         Ordering::Equal => true,
@@ -1112,6 +1190,7 @@ fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     }
 }
 
+/// Method for a server to ask a client to provide a proof of work for a request
 async fn require_proof_of_work<'a>(
     tx: &mut channels::Sender<PeerMessage, WriteHalf<'a>, Bincode>,
     rx: &mut channels::Receiver<PeerMessage, ReadHalf<'a>, Bincode>,
@@ -1135,6 +1214,7 @@ async fn require_proof_of_work<'a>(
     Err(anyhow!("Invalid response to proof of work challenge"))
 }
 
+/// Method for a client to respond to a proof of work request
 async fn solve_proof_of_work(
     tx: &mut channels::Sender<PeerMessage, OwnedWriteHalf, Bincode>,
     rx: &mut channels::Receiver<PeerMessage, OwnedReadHalf, Bincode>,
@@ -1164,6 +1244,7 @@ fn calculate_hash<T: Hash>(t: &T) -> u64 {
     s.finish()
 }
 
+/// Simple test case for the [`is_between_on_ring`] method
 #[test]
 fn test_is_between_on_ring() {
     // using common code.
