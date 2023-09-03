@@ -12,6 +12,9 @@ mod tests {
     use crate::api_communication;
     use crate::P2pDht;
 
+    /// Method to easily create peers for testing purposes
+    ///
+    /// Allows to deactivate the api socket for faster testing when it is not needed
     async fn start_peers(
         amount: usize,
         start_api_socket: bool,
@@ -47,6 +50,7 @@ mod tests {
         dhts
     }
 
+    /// Sends a shutdown signal to all dhts in the list, and then awaits the termination of all threads
     async fn stop_dhts(mut dhts: Vec<P2pDht>) {
         for dht in dhts.iter() {
             dht.initiate_shutdown();
@@ -57,12 +61,19 @@ mod tests {
         }
     }
 
+    /// Very simple test which starts two peers to check for any errors in a simple startup
+    ///
+    /// They should start talking with each other, but this is not tested here as this is designed
+    /// to catch any obvious bugs when changing functionality
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_start_two_peers() {
         let dhts = start_peers(2, true, 1).await;
         stop_dhts(dhts).await;
     }
 
+    /// Starts a single peer, and asks for a non-present key via the api socket.
+    ///
+    /// Expects a correctly formatted DHT_FAILURE answer
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -110,6 +121,10 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// Starts a single peer and then communicates via the api socket:
+    /// - Sends a DHT_PUT request to store a value
+    /// - Sends a DHT_GET request to retrieve the stored value
+    /// - Expects a DHT_SUCCESS message with the correct key and value originally stored
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -217,6 +232,7 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// Checks if a single peer can store a value. Does not involve the api socket
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -247,6 +263,11 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// This test stores 16 entries on two nodes and checks if both nodes can retrieve all values
+    ///
+    /// This is done by storing 8 entries on one node and 8 entries on the other node.
+    /// If working correctly the nodes distribute the entries based on the key, and are later able
+    /// to retrieve all values
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_multiple_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -319,6 +340,10 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// Larger integration test
+    ///
+    /// Starts 10 Nodes and then distributes insert calls over all nodes. Checks afterwards if all nodes
+    /// are able to find all entries. This demonstrates that the nodes are working correctly together
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_hammer_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -358,6 +383,10 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// Similar to the `test_hammer_store_get` test, but after creating a network with 10 nodes, two
+    /// nodes are disconnected from the network.
+    ///
+    /// The network afterwards should still be able to store values and retrieve them
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_stabilize() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
@@ -408,6 +437,7 @@ mod tests {
         stop_dhts(dhts).await;
     }
 
+    /// Triggers stabilization method on all dhts
     async fn stabilize_all(dhts: &Vec<P2pDht>) {
         for wrapper in dhts {
             if wrapper.cancellation_token.is_cancelled() {
@@ -425,6 +455,7 @@ mod tests {
         }
     }
 
+    /// Triggers the fix finger method on all dhts
     async fn fix_fingers_all(dhts: &Vec<P2pDht>) {
         for wrapper in dhts {
             if wrapper.cancellation_token.is_cancelled() {
@@ -439,6 +470,7 @@ mod tests {
         }
     }
 
+    /// Checks if all dhts are able to successfully retrieve all entries provided in the argument
     async fn check_all_keys(dhts: &Vec<P2pDht>, original_pairs: Vec<([u8; 32], Vec<u8>)>) {
         for (key, value) in original_pairs {
             // Get
@@ -457,6 +489,7 @@ mod tests {
             }
         }
     }
+    /// Simple printing method for debugging purposes
     #[cfg(test)]
     fn print_dhts(dhts: &Vec<P2pDht>) {
         for dht in dhts {
