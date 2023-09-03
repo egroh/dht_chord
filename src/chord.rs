@@ -72,11 +72,11 @@ macro_rules! connect_to_peer {
 /// Structure containing the state of the local node and all methods interacting with it
 #[derive(Clone)]
 pub struct Chord {
-    state: Arc<SChordState>,
+    state: Arc<ChordState>,
 }
 
 /// Structure containing all the state of chord
-struct SChordState {
+struct ChordState {
     /// the identifier of this node on the key ring
     node_id: u64,
     /// the address where this node is reachable
@@ -93,8 +93,8 @@ struct SChordState {
     /// The duration we store things per default
     default_storage_duration: Duration,
     /// The maximum duration for which we keep an item
-    /// we have been tasked to store by the network in our [`node_storage`](SChordState::node_storage).
-    /// Does not apply to [`personal_storage`](SChordState::personal_storage).
+    /// we have been tasked to store by the network in our [`node_storage`](ChordState::node_storage).
+    /// Does not apply to [`personal_storage`](ChordState::personal_storage).
     max_storage_duration: Duration,
 
     /// Something
@@ -131,20 +131,19 @@ impl Chord {
         server_address: SocketAddr,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
-        info!("Starting SChord server on {}", server_address);
         let self_clone = Chord {
             state: self.state.clone(),
         };
         let listener = TcpListener::bind(server_address)
             .await
-            .expect("Failed to bind SChord server socket");
+            .expect("Failed to bind Chord server socket");
         // Open channel for inter thread communication
         let (tx, mut rx) = mpsc::channel(1);
 
         let handle = tokio::spawn(async move {
             // Send signal that we are running
             tx.send(true).await.expect("Unable to send message");
-            info!("SChord listening for peers on {}", server_address);
+            info!("Chord listening for peers on {}", server_address);
             loop {
                 tokio::select! {
                     result = listener.accept() => {
@@ -182,7 +181,6 @@ impl Chord {
         default_storage_duration: Duration,
         max_storage_duration: Duration,
     ) -> Self {
-        info!("Creating new SChord node on: {}", server_address);
         let mut hasher = DefaultHasher::new();
         server_address.hash(&mut hasher);
         let node_id = hasher.finish();
@@ -286,7 +284,7 @@ impl Chord {
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
                         let chord = Chord {
-                            state: Arc::new(SChordState {
+                            state: Arc::new(ChordState {
                                 default_storage_duration,
                                 max_storage_duration,
                                 default_replication_amount: 4,
@@ -311,7 +309,7 @@ impl Chord {
             }
         } else {
             let chord = Chord {
-                state: Arc::new(SChordState {
+                state: Arc::new(ChordState {
                     default_storage_duration,
                     max_storage_duration,
                     default_replication_amount: 4,
@@ -350,22 +348,27 @@ impl Chord {
             let sleep_target_time = Instant::now() + Duration::from_secs(60);
 
             // Cleanup
-            self.state
-                .personal_storage
-                .iter()
-                .filter(|entry| entry.value().1 < Utc::now())
-                .for_each(|entry| {
-                    debug!("Removing expired key {} from personal storage", entry.key());
-                    self.state.personal_storage.remove(entry.key());
-                });
-            self.state
-                .node_storage
-                .iter()
-                .filter(|entry| entry.value().1 < Utc::now())
-                .for_each(|entry| {
-                    debug!("Removing expired key {} from node storage", entry.key());
-                    self.state.node_storage.remove(entry.key());
-                });
+            self.state.personal_storage.retain(|key, value| {
+                if value.1 < Utc::now() {
+                    debug!("Removing expired key {:x} from personal storage", key);
+                    // discard element
+                    false
+                } else {
+                    // keep element
+                    true
+                }
+            });
+
+            self.state.node_storage.retain(|key, value| {
+                if value.1 < Utc::now() {
+                    debug!("Removing expired key {:x} from node storage", key);
+                    // discard element
+                    false
+                } else {
+                    // keep element
+                    true
+                }
+            });
 
             // Replication
             let replication_result = async || -> Result<()> {

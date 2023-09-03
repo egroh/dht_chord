@@ -66,7 +66,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_get_failure() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, true, 2).await;
+        let dhts = start_peers(1, true, 3).await;
 
         let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
@@ -113,7 +113,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_api_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, true, 3).await;
+        let dhts = start_peers(1, true, 4).await;
 
         let dht = &dhts[0];
         let mut stream = TcpStream::connect(dht.api_address).await.unwrap();
