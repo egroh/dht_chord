@@ -14,7 +14,8 @@
 //! - Completely asynchronous and multi-threaded
 //! - Requests from the API and from other nodes are processed and answered concurrently
 //! - Free of race conditions due to Rusts ownership model
-//! - Performance optimized implementation, capable of running more than 20.000 nodes on a single machine //todo: measure
+//! - Performance optimized implementation, capable of starting a fully functional network with 2000
+//! nodes in under 10 seconds on a standard desktop computer (without PoW)
 //!
 //! # Security measures:
 //! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
@@ -31,6 +32,15 @@
 //!     as it would interfere with development and testing
 //! - Limited defence against nodes refusing to store values or disconnecting
 //!     - Our housekeeping thread continuously refreshes values that have been stored in the DHT upon our own request
+//! - The inherent structure of the overlay offers some limited defense against id mapping attacks
+//!     - It is not easily possible to fool the peers around the intimidated identity, as they are already in direct contact
+//!     - Other nodes usually try to route requests as fast as possible into proximity of the intimidated identity
+//! - Likewise the finger table offers resistance against eclipse attacks
+//!     - Nodes regularly check in with all their fingers, which makes it hard to eclipse them fully with ongoing churn
+//!  - Stabilization method, which regularly checks the health of peers in neighborhood and fixes the overlay if necessary
+//!  - Storage and Retrieval attacks are partially mitigated by built in replication
+//!  - Inconsistent behaviour also partially mitigated by built in replication
+//!  - DoS Attacks such as content pollution and index poisoning are resistet by PoW for insertion of values
 //! # Security evaluation:
 
 use std::cmp::Ordering;
