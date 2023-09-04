@@ -28,10 +28,10 @@ mod tests {
             let dht = P2pDht::new(
                 Duration::from_secs(60),
                 Duration::from_secs(60),
-                format!("127.0.0.1:4{:0>4}", port_counter)
+                format!("127.0.0.1:2{:0>4}", port_counter)
                     .parse::<SocketAddr>()
                     .unwrap(),
-                format!("127.0.0.1:3{:0>4}", port_counter)
+                format!("127.0.0.1:1{:0>4}", port_counter)
                     .parse::<SocketAddr>()
                     .unwrap(),
                 if i == 0 {
