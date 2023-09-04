@@ -6,9 +6,21 @@
 //!
 //! Answer to messages received are not guaranteed to be sent in the same order as the requests were received.
 //!
+//! As specified in the assignment for DHT, the following requests are accepted and processed:
 //!
-//! The only additional API message we have introduced, is the [`API_DHT_SHUTDOWN`] message.
-//! It allows for a gracefully shut down of the DHT server through the API-socket.
+//! - DHT PUT
+//! - DHT GET
+//! - DHT SUCCESS
+//! - DHT FAILURE
+//!
+//!  We introduced an additional API Message, [`API_DHT_SHUTDOWN`] which allows us to shut down a node gracefully through
+//!  the API.
+//!  The package has a fixed size and does not contain any other information:
+//!  ```
+//!  +--------+--------+--------+--------+
+//!  |        4        |  DHT SHUTDOWN   |
+//!  +--------+--------+--------+--------+
+//!  ```
 //!
 //! All [`ApiPacket`] s we receive, are first parsed by their [`ApiPacketHeader`].
 //! Depending on the header,
@@ -272,6 +284,7 @@ pub(crate) async fn start_api_server(
                     let writer = Arc::new(Mutex::new(writer));
 
                     let dht = dht.clone();
+                    let cancellation_token_clone = cancellation_token.clone();
 
                     tokio::spawn(async move {
                         let connection_result = async move || -> Result<(), Box<dyn Error>> {
@@ -325,7 +338,7 @@ pub(crate) async fn start_api_server(
                                             }
                                             ApiPacketMessage::Shutdown => {
                                                 debug!("Received shutdown request!");
-                                                // todo: shutdown dht server
+                                                cancellation_token_clone.cancel();
                                                 return Ok(());
                                             }
                                             ApiPacketMessage::Unparsed(_) => {}
