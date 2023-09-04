@@ -495,7 +495,7 @@ impl Chord {
     }
 
     /// Inserts an entry into our local [`node_storage`](ChordState::node_storage),
-    /// alongside their expiry time.
+    /// alongside its expiry time.
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.am_responsible_for_key(key));
         if self.state.max_storage_duration > ttl {
@@ -510,10 +510,10 @@ impl Chord {
         Ok(())
     }
 
-    /// Returns the value corresponding to the key, if it can be found in the whole network
+    /// Queries the network for a given key and returns its corresponding value.
     ///
-    /// If this value is not findable or an error occurred while trying to find the value,
-    /// this error is returned
+    /// If the value can not be found on the first try,
+    /// up to [`ChordState::default_replication_amount`] backup keys are tried.
     pub async fn get(&self, key: u64) -> Option<Vec<u8>> {
         debug!(
             "{} received API get request for key {}",
@@ -547,7 +547,7 @@ impl Chord {
                         debug!("Key {} found on peer {}", key, peer.address);
                         return Ok(value);
                     }
-                    return Err(anyhow!("Key not found"));
+                    Err(anyhow!("Key not found"))
                 }
                 if let Ok(value) = query_key(key, peer).await {
                     return Some(value);
@@ -557,10 +557,11 @@ impl Chord {
         None
     }
 
-    /// Returns if this node is responsible for the given key.
+    /// Returns whether this node is responsible for a given key.
     ///
     /// This is the case if the key lies between us (inclusive) and our predecessor (exclusive)
-    /// or no predecessor is currently known in which case this method always returns true
+    /// or no predecessor is currently known,
+    /// in which case this method returns true.
     fn am_responsible_for_key(&self, key: u64) -> bool {
         if let Some(predecessor) = self.state.predecessors.read().first() {
             is_between_on_ring(key, predecessor.id, self.state.node_id)
@@ -569,10 +570,10 @@ impl Chord {
         }
     }
 
-    /// Returns the [`ChordPeer`] responsible for the given key, or an error otherwise.
+    /// Returns the [`ChordPeer`] responsible for a given key.
     ///
-    /// This method will attempt to find suitable peer to ask about the responsible peer
-    /// in the finger table and contact it
+    /// This method attempts to recursively find the node responsible for a given key
+    /// by asking the most closely responsible node in our finger table to find it for us.
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         // This method should never be called when we are responsible for this key
         debug_assert!(!self.am_responsible_for_key(key));
@@ -669,22 +670,23 @@ impl Chord {
 
     /// Stabilized this node
     ///
-    /// Firstly this method will contact the predecessor:
-    /// - If the predecessor is reachable it will check that this node and the predecessor are in
-    /// agreement that there is no node between them, if there is we set that node as predecessor
-    /// - If the predecessor is not reachable we will iteratively contact predecessors until one is
-    /// found which is alive. We send this predecessor the message that we are his successor.
+    /// We contact our predecessor:
+    /// - If the predecessor is reachable, we check that this node and the predecessor are in
+    /// agreement about no nodes existing between them.
+    /// If there are any, we set them as our predecessor
+    /// - If the predecessor is not reachable,
+    /// we will iteratively step through our predecessor list in [`ChordState::predecessors`],
+    /// until an active node is found.
+    /// We then send this predecessor the message that we are his successor.
     ///
-    /// Once the predecessor has been stabilized, three more predecessors are recursively acquired
-    /// in case the immediate predecessor is no longer reachable
+    /// Once the predecessor has been stabilized,
+    /// three more predecessors are recursively acquired to guard against churn.
     ///
-    /// Secondly the successor is contacted, which is identical with the first entry in the finger table.
-    /// - If the successor is reachable, agreement is ensured that no node is inbetween or correct the overlay
-    /// - If the successor is not reachable, the next furthers unique peer in the finger table is found
-    /// and contacted.
-    /// - This peer is then iteratively updated until we either found this node or an unreachable peer
-    /// in which case we contact the last reachable peer and set this node as successor and update
-    /// our finger table accordingly
+    /// We contact our successor (the first node in our [`ChordState::finger_table`]):
+    /// - If the successor is reachable, we again ensure that there are no nodes between us
+    /// or update the finger table accordingly.
+    /// - If the successor is not reachable, the next peer in the finger table is contacted,
+    /// until we either find a working node or reach the end of the finger table.
     pub(crate) async fn stabilize(&self) -> Result<()> {
         if self.state.predecessors.read().is_empty() {
             // If we have no predecessor, we are alone and there is nothing to stabilize
@@ -777,7 +779,6 @@ impl Chord {
                 Ok(successor) => {
                     if successor.address == self.state.address {
                         // Nothing to do, successor is alive and knows about us
-
                         return Ok(());
                     }
 
@@ -802,7 +803,6 @@ impl Chord {
                 }
             }
         }
-
         Err(anyhow!("Did not find any contactable node in finger table"))
     }
 
