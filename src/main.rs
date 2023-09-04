@@ -3,17 +3,16 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::error::Error;
-
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
-use crate::chord::Chord;
 use anyhow::{anyhow, Result};
 use env_logger::Env;
 use ini::macro_safe_load;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use crate::chord::Chord;
 
 type IniMap = HashMap<String, HashMap<String, Option<String>>>;
 
@@ -136,27 +135,32 @@ fn load_address(key1: &str, key2: &str, config: &IniMap) -> Result<SocketAddr> {
         .ok_or(anyhow!("No socket address could be parsed"))
 }
 
-async fn create_dht_from_command_line_arguments() -> Option<P2pDht> {
+async fn create_dht_from_command_line_arguments() -> Result<P2pDht> {
     let args = env::args().collect::<Vec<String>>();
 
     if args.len() == 2 {
-        println!("Error: Expected two arguments");
-        println!("Usage: {} -c <config>", args[0]);
-        return None;
+        return Err(anyhow!(
+            "Error: Expected two arguments\nUsage: {} -c <config>",
+            args[0]
+        ));
     }
 
     if args[1] != "-c" {
-        println!("Error: Unsupported option {}", args[1]);
-        println!("Usage: {} -c <config>", args[0]);
-        return None;
+        return Err(anyhow!(
+            "Error: Unsupported option {}\nUsage: {} -c <config>",
+            args[1],
+            args[0]
+        ));
     }
 
     let config = match macro_safe_load(&args[2]) {
         Ok(conf) => conf,
         Err(e) => {
-            println!("Error: Cannot load file {}", args[2]);
-            println!("{}", e);
-            return None;
+            return Err(anyhow!(
+                "Error: Cannot load file {}\n{}",
+                args[2],
+                e.to_string()
+            ));
         }
     };
 
@@ -164,9 +168,10 @@ async fn create_dht_from_command_line_arguments() -> Option<P2pDht> {
         match load_duration("dht", "default_store_duration", &config) {
             Ok(value) => value,
             Err(e) => {
-                println!("Error: Cannot load \"default_store_duration\" from the config");
-                println!("{}", e);
-                return None;
+                return Err(anyhow!(
+                    "Error: Cannot load \"default_store_duration\" from the config\n{}",
+                    e.to_string()
+                ));
             }
         },
     );
@@ -175,27 +180,30 @@ async fn create_dht_from_command_line_arguments() -> Option<P2pDht> {
         Duration::from_secs(match load_duration("dht", "max_store_duration", &config) {
             Ok(value) => value,
             Err(e) => {
-                println!("Error: Cannot load \"max_store_duration\"  from the config");
-                println!("{}", e);
-                return None;
+                return Err(anyhow!(
+                    "Error: Cannot load \"max_store_duration\"  from the config\n{}",
+                    e.to_string()
+                ));
             }
         });
 
     let p2p_address = match load_address("dht", "p2p_address", &config) {
         Ok(value) => value,
         Err(e) => {
-            println!("Error: Cannot load \"p2p_address\" from the config");
-            println!("{}", e);
-            return None;
+            return Err(anyhow!(
+                "Error: Cannot load \"p2p_address\" from the config\n{}",
+                e.to_string()
+            ));
         }
     };
 
     let api_address = match load_address("dht", "api_address", &config) {
         Ok(value) => value,
         Err(e) => {
-            println!("Error: Cannot load \"api_address\" from the config");
-            println!("{}", e);
-            return None;
+            return Err(anyhow!(
+                "Error: Cannot load \"api_address\" from the config\n{}",
+                e.to_string()
+            ));
         }
     };
 
@@ -203,34 +211,28 @@ async fn create_dht_from_command_line_arguments() -> Option<P2pDht> {
         .get("bootstrap_node")
         .and_then(|address| address.clone().unwrap().to_socket_addrs().unwrap().next());
 
-    Some(
-        P2pDht::new(
-            default_store_duration,
-            max_store_duration,
-            p2p_address,
-            api_address,
-            initial_peer,
-            true,
-            true,
-        )
-        .await,
+    Ok(P2pDht::new(
+        default_store_duration,
+        max_store_duration,
+        p2p_address,
+        api_address,
+        initial_peer,
+        true,
+        true,
     )
+    .await)
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     match create_dht_from_command_line_arguments().await {
-        None => {
-            // Nothing to do but terminate
+        Ok(mut dht) => {
+            dht.await_termination().await;
+            Ok(())
         }
-        Some(mut dht) => {
-            // DHT has been created and is running, we wait for its termination
-            dht.await_termination().await
-        }
+        Err(e) => Err(e),
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
