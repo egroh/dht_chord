@@ -46,11 +46,7 @@ impl P2pDht {
             max_storage_duration,
         )
         .await;
-        let peer_server_thread = Some(
-            chord
-                .start_server_socket(public_server_address, cancellation_token.clone())
-                .await,
-        );
+        let peer_server_thread = Some(chord.start_server_socket(cancellation_token.clone()).await);
         let api_server_thread = match start_api_server {
             true => Some(
                 api_communication::start_api_server(

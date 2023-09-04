@@ -13,8 +13,8 @@
 //! - Completely asynchronous and multi-threaded
 //! - Requests from the API and from other nodes are processed and answered concurrently
 //! - Free of race conditions due to Rusts ownership model
-//! - Performance optimized implementation, capable of starting a fully functional network with 2000
-//! nodes in under 10 seconds on a standard desktop computer (without PoW)
+//! - Performance optimized implementation, capable of establishing a fully connected network with 2000
+//! nodes running on a single machine in under 10 seconds (without PoW)
 //!
 //! # Security measures:
 //! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
@@ -46,9 +46,9 @@
 //! # Future Work
 //!
 //! ## improve Sybil defence
-//!     - It would likely sensible to introduce further hardware such as bandwidth(with respective scanners)
-//!     - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
-//!     - This would also help with other attacks
+//! - It would likely sensible to introduce further hardware such as bandwidth(with respective scanners)
+//! - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
+//! - This would also help with other attacks
 //!
 //! ## Misbehaviour defence
 //! Currently only crash faults are dealt with. Malicious faults will go undetected.
@@ -157,25 +157,16 @@ struct ChordState {
 }
 
 impl Chord {
-    /// Method starting the server socket to accept request from other peers
-    ///
-    /// This method needs to be called after construction of the `Chord` struct
-    ///
-    /// The cancellation token given, allows to stop the and shutdown the listener
-    ///
-    /// # Arguments
-    ///
-    /// * `server_address` - the address on which the server will be found
-    /// * `cancellation_token` - of this token is cancelled, the node will not accept any more new connections and unbind the socket
+    /// Starts the server socket to listen for incoming peer connections
+    /// The cancellation token can be used to gracefully stop the server socet
     pub async fn start_server_socket(
         &self,
-        server_address: SocketAddr,
         cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
         let self_clone = Chord {
             state: self.state.clone(),
         };
-        let listener = TcpListener::bind(server_address)
+        let listener = TcpListener::bind(self.state.address)
             .await
             .expect("Failed to bind Chord server socket");
         // Open channel for inter thread communication
@@ -184,7 +175,7 @@ impl Chord {
         let handle = tokio::spawn(async move {
             // Send signal that we are running
             tx.send(true).await.expect("Unable to send message");
-            info!("Chord listening for peers on {}", server_address);
+            info!("Chord listening for peers on {}", self_clone.state.address);
             loop {
                 tokio::select! {
                     result = listener.accept() => {
@@ -193,19 +184,13 @@ impl Chord {
                         state: self_clone.state.clone(),
                     };
                     tokio::spawn(async move {
-                        match self_clone.accept_peer_connection(stream).await {
-                            Ok(_) => {
-                                // Everything fine, no need to do anything
+                            if let Err(e) = self_clone.accept_peer_connection(stream).await {
+                                error!("Error in connection {:?}", e);
                             }
-                            Err(e) => {
-                                // todo maybe send error message to peer
-                                warn!("Error in connection {:?}", e);
-                            }
-                        }
                     });
                     }
                     _ = cancellation_token.cancelled() => {
-                        info!("{}: Stopped accepting new peer connections.", server_address);
+                        info!("{}: Stopped accepting new peer connections.", self_clone.state.address);
                         break;
                     }
                 }
@@ -220,12 +205,11 @@ impl Chord {
     ///
     /// If no initial peer is provided, it is assumed that this node is the only node present.
     ///
-    /// Otherwise the initial peer is contacted, the successor and predecessor of this node is determined
-    /// and automatically contacted to transfer the entries this node is responsible for and adjust
-    /// the overlay to include this node.
+    /// Otherwise the initial peer is contacted to determine the successor and predecessor of this node.
+    /// They are then contacted to transfer responsibility of the entries this node is responsible for.
     ///
-    /// The finger table will be all be initialized to point to the successor, as they will be adjusted
-    /// with the next periodic housekeeping
+    /// The finger table will be initialized with all entries
+    /// pointing to our successor until the first run of [Chord::housekeeping].
     pub async fn new(
         initial_peer: Option<SocketAddr>,
         server_address: SocketAddr,
@@ -327,7 +311,6 @@ impl Chord {
                                 })
                             })
                             .collect();
-                        // todo: stabilize
                         // Close connection to successor
                         tx.send(PeerMessage::CloseConnection).await?;
                         let chord = Chord {
@@ -389,16 +372,17 @@ impl Chord {
         let chord = self.clone();
         let cancellation_token = cancellation_token.clone();
         tokio::spawn(async move {
-            chord.perform_housekeeping(cancellation_token).await;
+            chord.housekeeping(cancellation_token).await;
         })
     }
 
     /// Performs the housekeeping which performs some periodic tasks
-    /// - Cleanup of expired values in `personal_storage` and `node_storage`
-    /// - Refresh keys with their replication on other nodes
+    /// - Cleanup of expired values in
+    /// [`ChordState::personal_storage`] and [`ChordState::node_storage`]
+    /// - Refresh keys and their replications on other nodes
     /// - Stabilize to account for churn
     /// - Update finger table to optimize routing
-    async fn perform_housekeeping(&self, cancellation_token: CancellationToken) {
+    async fn housekeeping(&self, cancellation_token: CancellationToken) {
         while !cancellation_token.is_cancelled() {
             let sleep_target_time = Instant::now() + Duration::from_secs(60);
 
@@ -474,10 +458,10 @@ impl Chord {
         }
     }
 
-    /// Inserts the value in the network
+    /// Inserts a key value pair into the network
     ///
-    /// It will automatically also insert the replications of the entry and keep track of the ttl
-    /// to refresh the value and its replications if necessary
+    /// If specified, multiple replications of the value will be inserted.
+    /// All inserted values are periodically rebroadcasted across to counter churn.
     pub async fn insert(
         &self,
         key: u64,
@@ -510,8 +494,8 @@ impl Chord {
         Ok(())
     }
 
-    /// Inserts the entry into the [`node_storage`](ChordState::node_storage) with the correct time
-    /// when the entry will be expired
+    /// Inserts an entry into our local [`node_storage`](ChordState::node_storage),
+    /// alongside their expiry time.
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
         debug_assert!(self.am_responsible_for_key(key));
         if self.state.max_storage_duration > ttl {
@@ -530,16 +514,14 @@ impl Chord {
     ///
     /// If this value is not findable or an error occurred while trying to find the value,
     /// this error is returned
-    ///
-    /// This method blocks until the result has been determined
-    pub async fn get(&self, key: u64) -> Result<Vec<u8>> {
+    pub async fn get(&self, key: u64) -> Option<Vec<u8>> {
         debug!(
             "{} received API get request for key {}",
             self.state.address, key
         );
         if let Some(entry) = self.state.personal_storage.get(&key) {
             debug!("Key {} found in personal storage", key);
-            return Ok((*entry.value().0).to_owned());
+            return Some((*entry.value().0).to_owned());
         }
         for i in 0..=self.state.default_replication_amount {
             let key = calculate_hash(&(key + i as u64));
@@ -550,21 +532,29 @@ impl Chord {
                 .map(|entry| entry.value().0.to_owned())
             {
                 debug!("Key {} found in node storage", key);
-                return Ok(value);
+                return Some(value);
             } else if !self.am_responsible_for_key(key) {
-                let peer = self.get_responsible_node(key).await?;
-                let (mut tx, mut rx) = connect_to_peer!(peer.address);
-                tx.send(PeerMessage::GetValue(key)).await?;
-                solve_proof_of_work(&mut tx, &mut rx).await?;
-                let response = rx.recv().await?;
-                tx.send(PeerMessage::CloseConnection).await?;
-                if let PeerMessage::GetValueResponse(Some(value)) = response {
-                    debug!("Key {} found on peer {}", key, peer.address);
-                    return Ok(value);
+                let Ok(peer) = self.get_responsible_node(key).await else {
+                    continue;
+                };
+                async fn query_key(key: u64, peer: ChordPeer) -> Result<Vec<u8>> {
+                    let (mut tx, mut rx) = connect_to_peer!(peer.address);
+                    tx.send(PeerMessage::GetValue(key)).await?;
+                    solve_proof_of_work(&mut tx, &mut rx).await?;
+                    let response = rx.recv().await?;
+                    tx.send(PeerMessage::CloseConnection).await?;
+                    if let PeerMessage::GetValueResponse(Some(value)) = response {
+                        debug!("Key {} found on peer {}", key, peer.address);
+                        return Ok(value);
+                    }
+                    return Err(anyhow!("Key not found"));
+                }
+                if let Ok(value) = query_key(key, peer).await {
+                    return Some(value);
                 }
             }
         }
-        Err(anyhow!("Key not found"))
+        None
     }
 
     /// Returns if this node is responsible for the given key.

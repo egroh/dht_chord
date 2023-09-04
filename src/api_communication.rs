@@ -208,7 +208,7 @@ async fn process_api_get_request(
 ) {
     let hashed_key = hash_key_bytes(&get.key);
     match dht.get(hashed_key).await {
-        Ok(value) => {
+        Some(value) => {
             let header = ApiPacketHeader {
                 size: 4 + get.key.len() as u16 + value.len() as u16,
                 message_type: API_DHT_SUCCESS,
@@ -225,10 +225,7 @@ async fn process_api_get_request(
                 warn!("Error writing to socket: {}", e);
             }
         }
-        Err(e) => {
-            // todo maybe remove this
-            warn!("{}", e);
-
+        None => {
             let header = ApiPacketHeader {
                 size: 4 + get.key.len() as u16,
                 message_type: API_DHT_FAILURE,

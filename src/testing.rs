@@ -478,13 +478,10 @@ mod tests {
 
             for dht in dhts {
                 match dht.dht.get(hashed_key).await {
-                    Err(e) => {
-                        error!("{:?}", e);
-                        panic!("Value has not been found")
-                    }
-                    Ok(value_back) => {
+                    Some(value_back) => {
                         assert_eq!(value_back, value);
                     }
+                    None => panic!("Value has not been found"),
                 }
             }
         }
