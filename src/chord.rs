@@ -73,7 +73,7 @@
 //!
 //! ### Retrieving or String a Value
 //! - send [PeerMessage::GetNode] to obtain the node responsible for the key
-//! - send [PeerMessage::GetValue] or [PeerMessage::Set] to retrieve or set the value
+//! - send [PeerMessage::GetValue] or [PeerMessage::InsertValue] to retrieve or set the value
 //!
 //! # Future Work
 //!
@@ -225,6 +225,7 @@ impl Chord {
         let node_id = hasher.finish();
 
         if let Some(initial_peer) = initial_peer {
+            info!("Connecting to bootstrap node: {}", initial_peer);
             let initial_peer_connection_result = async || -> Result<Chord> {
                 // Connect to initial node
                 let (mut tx, mut rx) = connect_to_peer!(initial_peer);
@@ -343,6 +344,7 @@ impl Chord {
             }
         } else {
             // Construct chord which is alone, i.e. no other nodes exists
+            info!("No bootstrap node provided; starting alone");
             Chord {
                 state: Arc::new(ChordState {
                     default_storage_duration,
@@ -388,13 +390,14 @@ impl Chord {
             loop {
                 tokio::select! {
                     result = listener.accept() => {
-                    let (stream, _) = result.unwrap();
+                    let (stream, address) = result.unwrap();
                     let self_clone = Chord {
                         state: self_clone.state.clone(),
                     };
+                    trace!("{}: New connection from: {}", self_clone.state.address, address);
                     tokio::spawn(async move {
                             if let Err(e) = self_clone.accept_peer_connection(stream).await {
-                                error!("Error in connection {:?}", e);
+                                error!("Error in connection with connecting peer: {:?}", e);
                             }
                     });
                     }
@@ -509,7 +512,7 @@ impl Chord {
     /// Inserts a key value pair into the network
     ///
     /// If specified, multiple replications of the value will be inserted.
-    /// All inserted values are periodically rebroadcast across to counter churn.
+    /// All inserted values are periodically rebroadcasted to counter churn.
     pub async fn insert(
         &self,
         key: u64,
@@ -1185,7 +1188,6 @@ impl Chord {
                         }
                     }
                     self.assert_finger_table_invariants_correct();
-                    // todo maybe send answer
                     return Ok(());
                 }
                 PeerMessage::SetPredecessor(supposed_predecessor) => {

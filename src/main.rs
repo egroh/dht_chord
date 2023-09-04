@@ -143,8 +143,9 @@ async fn create_dht_from_command_line_arguments() -> P2pDht {
         .next()
         .unwrap();
 
-    // todo
-    let initial_peer = None;
+    let initial_peer = config["dht"]
+        .get("bootstrap_node")
+        .and_then(|address| address.clone().unwrap().to_socket_addrs().unwrap().next());
 
     P2pDht::new(
         default_store_duration,
@@ -160,8 +161,6 @@ async fn create_dht_from_command_line_arguments() -> P2pDht {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // todo: RPS communication for bootstrap peers or get from config file
-
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let mut dht = create_dht_from_command_line_arguments().await;
 

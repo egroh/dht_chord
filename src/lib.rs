@@ -21,14 +21,15 @@
 //! The configuration file is expected to be in the INI format. The following configuration options are available:
 //! ```ini
 //! [dht]
-//! default_store_duration = 60  ; Default storage duration in seconds
-//! max_store_duration = 600     ; Maximum storage duration in seconds
-//! p2p_address = 127.0.0.1:8001 ; Address to listen on for P2P connections
-//! api_address = 127.0.0.1:7401 ; Address to listen on for API connections
+//! default_store_duration = 60     ; Default storage duration in seconds
+//! max_store_duration = 600        ; Maximum storage duration in seconds
+//! p2p_address = 127.0.0.1:8001    ; Address to listen on for P2P connections
+//! api_address = 127.0.0.1:7401    ; Address to listen on for API connections
+//! bootstrap_node= 127.0.0.1:8000 ; (Optional) Address of a bootstrap node
 //! ```
-//! So to run our program, you may use:
+//! To run our program, you may use:
 //! ```bash
-//! p2p_dht -c config.ini
+//! cargo run --release -- p2p_dht -c example_config_node_0.ini
 //! ```
 //! We support different levels of logging, with the default being `info`.
 //! You can change the log level by setting the `RUST_LOG` environment variable to one of the following values:
