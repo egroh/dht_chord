@@ -1,5 +1,5 @@
 #![feature(async_closure)]
-
+#![allow(dead_code)]
 use std::env;
 use std::error::Error;
 

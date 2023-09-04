@@ -71,5 +71,6 @@
 //! Below, you will find links to modules of this crate:
 #![doc(html_favicon_url = "https://www.net.in.tum.de/favicon.ico")]
 #![doc(html_logo_url = "https://net.in.tum.de/Images/tum-logo-5d7bd62d.svg")]
+#![allow(dead_code)]
 pub mod api_communication;
 pub mod chord;

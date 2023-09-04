@@ -5,7 +5,7 @@ mod tests {
 
     use bincode::{DefaultOptions, Options};
     use env_logger::Env;
-    use log::{debug, error, info};
+    use log::{debug, info};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
