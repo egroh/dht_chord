@@ -15,7 +15,7 @@
 //!
 //!  We introduced an additional API Message, [`API_DHT_SHUTDOWN`] which allows us to shut down a node gracefully through
 //!  the API.
-//!  The package has a fixed size and does not contain any other information:
+//!  The package has a fixed size and does not contain any other information except the header:
 //!  ```
 //!  +--------+--------+--------+--------+
 //!  |        4        |  DHT SHUTDOWN   |

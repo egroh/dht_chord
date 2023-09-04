@@ -25,7 +25,7 @@
 //! max_store_duration = 600        ; Maximum storage duration in seconds
 //! p2p_address = 127.0.0.1:8001    ; Address to listen on for P2P connections
 //! api_address = 127.0.0.1:7401    ; Address to listen on for API connections
-//! bootstrap_node= 127.0.0.1:8000 ; (Optional) Address of a bootstrap node
+//! bootstrap_node = 127.0.0.1:8000 ; (Optional) Address of a bootstrap node
 //! ```
 //! To run our program, you may use:
 //! ```bash
