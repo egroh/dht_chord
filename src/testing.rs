@@ -385,7 +385,7 @@ mod tests {
     async fn test_stabilize() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 10;
-        let mut dhts = start_peers(amount_peers, false, 60).await;
+        let mut dhts = start_peers(amount_peers, false, 30).await;
 
         stabilize_all(&dhts).await;
         fix_fingers_all(&dhts).await;
