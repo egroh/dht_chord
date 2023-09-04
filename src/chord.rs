@@ -96,23 +96,23 @@
 //! no longer exists.
 //!
 //! # Work Distribution
-//!     - We usually worked closely together on the project, even including pair-programming
-//!     - Frequent communication and git allowed us to agilely distribute open tasks, further supported by automatic tests
-//!     - We helped each other out in solving open problems, bugs and making design decision
-//!     - In since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
-//!     - Valentin on the other hand mostly focused on security features, housekeeping, and CI/CD Pipline for automatic testing and documentation deployment
+//!  - We usually worked closely together on the project, even including pair-programming
+//!  - Frequent communication and git allowed us to agilely distribute open tasks, further supported by automatic tests
+//!  - We helped each other out in solving open problems, bugs and making design decision
+//!  - In since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
+//!  - Valentin on the other hand mostly focused on security features, housekeeping, and CI/CD Pipline for automatic testing and documentation deployment
 //!
 //! # Effort Spend
-//!     - Since the midterm report, we were able to extend our framework without any major changes
-//!     - Therefore we were able to spend all effort on implementing new features
-//!     - Our effort therefore was spend on implementing everything named in the work distribution
-//!     - Additionally significant effort was spend on debugging multithreaded asynchronous code over multiple nodes
-//!     to realize the expected functionality of routing and stabilization
-//!     - Specifically for stabilize an own approach was developed to ensure proper functionality
-//!     with our implementation, augmented by the fact that there are few resources on how to handle
-//!     churn in chord
-//!     - Otherwise there has also been design effort to design and evaluate different approaches
-//!     for security to arrive at the system we implemented
+//!  - Since the midterm report, we were able to extend our framework without any major changes
+//!  - Therefore we were able to spend all effort on implementing new features
+//!  - Our effort therefore was spend on implementing everything named in the work distribution
+//!  - Additionally significant effort was spend on debugging multithreaded asynchronous code over multiple nodes
+//!  to realize the expected functionality of routing and stabilization
+//!  - Specifically for stabilize an own approach was developed to ensure proper functionality
+//!  with our implementation, augmented by the fact that there are few resources on how to handle
+//!  churn in chord
+//!  - Otherwise there has also been design effort to design and evaluate different approaches
+//!  for security to arrive at the system we implemented
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
