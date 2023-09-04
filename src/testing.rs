@@ -275,8 +275,6 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        print_dhts(&dhts);
-
         let dht0 = &dhts[0];
         let dht1 = &dhts[1];
 
@@ -332,7 +330,6 @@ mod tests {
         }
 
         tokio::time::sleep(Duration::from_millis(20)).await;
-        print_dhts(&dhts);
 
         let pairs_all = [pairs0, pairs1].concat();
 
@@ -376,10 +373,7 @@ mod tests {
         }
 
         tokio::time::sleep(Duration::from_millis(20)).await;
-        print_dhts(&dhts);
-
         check_all_keys(&dhts, pairs).await;
-
         stop_dhts(dhts).await;
     }
 
@@ -404,7 +398,6 @@ mod tests {
 
         stabilize_all(&dhts).await;
         fix_fingers_all(&dhts).await;
-        print_dhts(&dhts);
 
         let pairs_size: usize = 16;
         let mut pairs: Vec<([u8; 32], Vec<u8>)> = Vec::new();
@@ -430,10 +423,7 @@ mod tests {
         }
 
         tokio::time::sleep(Duration::from_millis(20)).await;
-        print_dhts(&dhts);
-
         check_all_keys(&dhts, pairs).await;
-
         stop_dhts(dhts).await;
     }
 
@@ -484,13 +474,6 @@ mod tests {
                     None => panic!("Value has not been found"),
                 }
             }
-        }
-    }
-    /// Simple printing method for debugging purposes
-    #[cfg(test)]
-    fn print_dhts(dhts: &Vec<P2pDht>) {
-        for dht in dhts {
-            dht.dht.print_chord();
         }
     }
 }

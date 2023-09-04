@@ -157,50 +157,6 @@ struct ChordState {
 }
 
 impl Chord {
-    /// Starts the server socket to listen for incoming peer connections
-    /// The cancellation token can be used to gracefully stop the server socet
-    pub async fn start_server_socket(
-        &self,
-        cancellation_token: CancellationToken,
-    ) -> JoinHandle<()> {
-        let self_clone = Chord {
-            state: self.state.clone(),
-        };
-        let listener = TcpListener::bind(self.state.address)
-            .await
-            .expect("Failed to bind Chord server socket");
-        // Open channel for inter thread communication
-        let (tx, mut rx) = mpsc::channel(1);
-
-        let handle = tokio::spawn(async move {
-            // Send signal that we are running
-            tx.send(true).await.expect("Unable to send message");
-            info!("Chord listening for peers on {}", self_clone.state.address);
-            loop {
-                tokio::select! {
-                    result = listener.accept() => {
-                    let (stream, _) = result.unwrap();
-                    let self_clone = Chord {
-                        state: self_clone.state.clone(),
-                    };
-                    tokio::spawn(async move {
-                            if let Err(e) = self_clone.accept_peer_connection(stream).await {
-                                error!("Error in connection {:?}", e);
-                            }
-                    });
-                    }
-                    _ = cancellation_token.cancelled() => {
-                        info!("{}: Stopped accepting new peer connections.", self_clone.state.address);
-                        break;
-                    }
-                }
-            }
-        });
-        // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
-        rx.recv().await.unwrap();
-        handle
-    }
-
     /// Construct new instance of chord.
     ///
     /// If no initial peer is provided, it is assumed that this node is the only node present.
@@ -209,7 +165,7 @@ impl Chord {
     /// They are then contacted to transfer responsibility of the entries this node is responsible for.
     ///
     /// The finger table will be initialized with all entries
-    /// pointing to our successor until the first run of [Chord::housekeeping].
+    /// pointing to our successor until the first run of housekeeping.
     pub async fn new(
         initial_peer: Option<SocketAddr>,
         server_address: SocketAddr,
@@ -360,6 +316,50 @@ impl Chord {
                 }),
             }
         }
+    }
+
+    /// Starts the server socket to listen for incoming peer connections
+    /// The cancellation token can be used to gracefully stop the server socket
+    pub async fn start_server_socket(
+        &self,
+        cancellation_token: CancellationToken,
+    ) -> JoinHandle<()> {
+        let self_clone = Chord {
+            state: self.state.clone(),
+        };
+        let listener = TcpListener::bind(self.state.address)
+            .await
+            .expect("Failed to bind Chord server socket");
+        // Open channel for inter thread communication
+        let (tx, mut rx) = mpsc::channel(1);
+
+        let handle = tokio::spawn(async move {
+            // Send signal that we are running
+            tx.send(true).await.expect("Unable to send message");
+            info!("Chord listening for peers on {}", self_clone.state.address);
+            loop {
+                tokio::select! {
+                    result = listener.accept() => {
+                    let (stream, _) = result.unwrap();
+                    let self_clone = Chord {
+                        state: self_clone.state.clone(),
+                    };
+                    tokio::spawn(async move {
+                            if let Err(e) = self_clone.accept_peer_connection(stream).await {
+                                error!("Error in connection {:?}", e);
+                            }
+                    });
+                    }
+                    _ = cancellation_token.cancelled() => {
+                        info!("{}: Stopped accepting new peer connections.", self_clone.state.address);
+                        break;
+                    }
+                }
+            }
+        });
+        // Await thread spawn, to avoid EOF errors because the thread is not ready to accept messages
+        rx.recv().await.unwrap();
+        handle
     }
 
     /// Method to start the housekeeping thread
@@ -513,7 +513,7 @@ impl Chord {
     /// Queries the network for a given key and returns its corresponding value.
     ///
     /// If the value can not be found on the first try,
-    /// up to [`ChordState::default_replication_amount`] backup keys are tried.
+    /// we also query for replicated backup keys.
     pub async fn get(&self, key: u64) -> Option<Vec<u8>> {
         debug!(
             "{} received API get request for key {}",
@@ -806,10 +806,9 @@ impl Chord {
         Err(anyhow!("Did not find any contactable node in finger table"))
     }
 
-    /// This method attempts to contact the predecessor at the given index.
-    /// If this predecessor is not reachable, or any other issue occurs an error is returned
-    ///
-    /// If this connection is successful the predecessor list is modified accordingly
+    /// Attempts to contact the predecessor at the given index.
+    /// If this predecessor is not reachable, or any other issue occurs, an error is returned.
+    /// If this connection is successful the predecessor list is modified accordingly.
     async fn stabilize_predecessor(&self, predecessor_index: usize) -> Result<()> {
         let some_predecessor = self.state.predecessors.read()[predecessor_index];
 
@@ -840,11 +839,11 @@ impl Chord {
         }
     }
 
-    /// This method attempts to contact the given possible successor.
-    /// If this successor is not reachable, or any other issue occurs an error is returned
-    ///
-    /// If the successor is reachable, this method will also iteratively find any reachable
-    /// predecessor of the successor, to arrive at the last reachable successor before this node
+    /// Attempts to contact the given successor.
+    /// If the successor is not reachable, or any other issue occurs, an error is returned.
+    /// If the successor is reachable,
+    /// this method will iteratively find any reachable predecessor of the successor,
+    /// and return the last reachable successor before this node.
     async fn stabilize_successor(&self, possible_successor: ChordPeer) -> Result<ChordPeer> {
         let mut closest_reachable_successor = possible_successor;
         let mut next_possible_successor = closest_reachable_successor;
@@ -896,10 +895,11 @@ impl Chord {
         Ok(closest_reachable_successor)
     }
 
-    /// Iterates through all finger table entries and asks the previous entry about the peer in the next entry
+    /// Iterates through all finger table entries
+    /// and asks the previous entry about the peer in the next entry.
     ///
-    /// This ensures that all finger table entries point to the successor of 2^index where index is
-    /// the index in the finger table
+    /// This ensures that all finger table entries point to the successor of 2^index,
+    /// where index is the index in the finger table.
     pub(crate) async fn fix_fingers(&self) -> Result<()> {
         if self.state.predecessors.read().is_empty() {
             // If we have no predecessor, we are alone and there is nothing to stabilize
@@ -938,7 +938,7 @@ impl Chord {
         Ok(())
     }
 
-    /// Returns a cord peer representing this node, useful for peer communication
+    /// Returns a [`ChordPeer`] representing this node, useful for peer communication
     fn as_chord_peer(&self) -> ChordPeer {
         ChordPeer {
             id: self.state.node_id,
@@ -1207,31 +1207,6 @@ impl Chord {
             }
         }
     }
-
-    /// Displays this node for debugging purposes
-    #[cfg(test)]
-    pub(crate) fn print_chord(&self) {
-        debug!("{}  {:x}", self.state.address, self.state.node_id);
-        debug!(
-            " S:{} {:x}",
-            self.state.finger_table[0].read().address,
-            self.state.finger_table[0].read().id
-        );
-        debug!(
-            " P:{} {:x}",
-            self.state.predecessors.read()[0].address,
-            self.state.predecessors.read()[0].id
-        );
-        debug!("Stored values:");
-        for (key, value) in self.state.node_storage.clone() {
-            debug!("  {:x}: {:?}", key, value);
-        }
-        debug!("Finger table:");
-        for entry in &self.state.finger_table[55..64] {
-            debug!("{:?}", *entry.read());
-        }
-        debug!("---");
-    }
 }
 
 /// Returns true if the value is between lower and upper on a ring, i.e. with wrap around
@@ -1302,7 +1277,6 @@ fn calculate_hash<T: Hash>(t: &T) -> u64 {
 /// Simple test case for the [`is_between_on_ring`] method
 #[test]
 fn test_is_between_on_ring() {
-    // using common code.
     assert_ne!(
         is_between_on_ring(
             15203477739406956416,
