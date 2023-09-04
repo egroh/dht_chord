@@ -898,7 +898,7 @@ impl Chord {
     /// Iterates through all finger table entries
     /// and asks the previous entry about the peer in the next entry.
     ///
-    /// This ensures that all finger table entries point to the successor of 2^index,
+    /// This ensures that all finger table entries point to the successor of `2^index`,
     /// where index is the index in the finger table.
     pub(crate) async fn fix_fingers(&self) -> Result<()> {
         if self.state.predecessors.read().is_empty() {
@@ -938,7 +938,7 @@ impl Chord {
         Ok(())
     }
 
-    /// Returns a [`ChordPeer`] representing this node, useful for peer communication
+    /// Returns a [`ChordPeer`] representing this node; useful for peer communication.
     fn as_chord_peer(&self) -> ChordPeer {
         ChordPeer {
             id: self.state.node_id,
@@ -971,13 +971,7 @@ impl Chord {
         }
     }
 
-    /// Returns a result with the successor of `node_to_ask`.
-    /// If the provided peer is not reachable an error is returned
-    ///
-    ///
-    /// # Arguments
-    ///
-    /// * `node_to_ask` - the node to ask for its predecessor
+    /// Asks a [`ChordPeer`] for its successor
     async fn ask_for_successor(&self, node_to_ask: ChordPeer) -> Result<ChordPeer> {
         let (mut tx, mut rx) = connect_to_peer!(node_to_ask.address);
         // Add one to the id we ask for, as the successor is responsible for this key
@@ -987,7 +981,6 @@ impl Chord {
         match rx.recv().await? {
             PeerMessage::GetNodeResponse(peer) => {
                 tx.send(PeerMessage::CloseConnection).await?;
-
                 Ok(peer)
             }
             _ => {
@@ -997,15 +990,14 @@ impl Chord {
         }
     }
 
-    /// Returns the address on which this node is listening for incoming connections
+    /// Returns the address on which this node is listening for incoming connections.
     #[cfg(test)]
     pub(crate) fn get_address(&self) -> SocketAddr {
         self.state.address
     }
 
-    /// Returns the predecessor of this node
-    ///
-    /// If no predecessor is present, it returns this node as [`ChordPeer`]
+    /// Returns the predecessor of this node.
+    /// If we do not have a successor, we return ourselves as [`ChordPeer`].
     fn get_predecessor(&self) -> ChordPeer {
         *self
             .state
@@ -1015,7 +1007,7 @@ impl Chord {
             .unwrap_or(&self.as_chord_peer())
     }
 
-    /// Handle incoming request from peer. Called by the peer server thread
+    /// Handle incoming request from a connecting peer.
     async fn accept_peer_connection(&self, mut stream: TcpStream) -> Result<()> {
         let (reader, writer) = stream.split();
         let (mut tx, mut rx) = channels::channel(reader, writer);
@@ -1189,29 +1181,28 @@ impl Chord {
         }
     }
 
-    /// Returns the id which is 2^index after this node
+    /// Returns the id which is `2^index` after this node
     fn id_at_finger_index(&self, index: usize) -> u64 {
         self.state.node_id.wrapping_add(2u64.pow(index as u32))
     }
 
-    /// Simple assert method which asserts that the node does not contain itself in the finger table
+    /// Asserts that we do not contain ourselves in the finger table.
     ///
-    /// If the node would contain itself, there is a possibility for endless routing loops
+    /// If a node would contain itself, there is a possibility of endless routing loops.
     fn assert_finger_table_invariants_correct(&self) {
-        for (i, entry) in self.state.finger_table.iter().enumerate() {
-            // Checks if the routing table contains ourselves, which should never be the case
-            let finger = entry.read();
-            if finger.id == self.state.node_id {
-                error!("Found self in finger table at index {}", i);
-                panic!("Reached invalid state");
+        if cfg!(debug_assertions) {
+            for (i, entry) in self.state.finger_table.iter().enumerate() {
+                // Checks if the routing table contains ourselves, which should never be the case
+                let finger = entry.read();
+                if finger.id == self.state.node_id {
+                    panic!("Found self in finger table at index {}", i);
+                }
             }
         }
     }
 }
 
-/// Returns true if the value is between lower and upper on a ring, i.e. with wrap around
-///
-/// Note this always returns true if lower is equals to upper
+/// Check if a key is between two keys/nodes on the ring
 fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     match lower.cmp(&upper) {
         Ordering::Equal => true,
@@ -1220,7 +1211,8 @@ fn is_between_on_ring(value: u64, lower: u64, upper: u64) -> bool {
     }
 }
 
-/// Method for a server to ask a client to provide a proof of work for a request
+/// Sends a [`ProofOfWorkChallenge`] to the connected peer
+/// and waits for the corresponding [`peer_messages::ProofOfWorkResponse`].
 async fn require_proof_of_work<'a>(
     tx: &mut channels::Sender<PeerMessage, WriteHalf<'a>, Bincode>,
     rx: &mut channels::Receiver<PeerMessage, ReadHalf<'a>, Bincode>,
@@ -1244,7 +1236,8 @@ async fn require_proof_of_work<'a>(
     Err(anyhow!("Invalid response to proof of work challenge"))
 }
 
-/// Method for a client to respond to a proof of work request
+/// Solves a [`ProofOfWorkChallenge`]
+/// and sends the corresponding [`peer_messages::ProofOfWorkResponse`].
 async fn solve_proof_of_work(
     tx: &mut channels::Sender<PeerMessage, OwnedWriteHalf, Bincode>,
     rx: &mut channels::Receiver<PeerMessage, OwnedReadHalf, Bincode>,
