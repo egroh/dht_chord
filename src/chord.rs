@@ -16,7 +16,27 @@
 //! - Performance optimized implementation, capable of establishing a fully connected network with 2000
 //! nodes running on a single machine in under 10 seconds (without PoW)
 //!
-//! # Security measures:
+//! # Architecture:
+//!  - Our architecture separates the Chord module from the API communication
+//!  - The API only makes the features of the Chord module accessible via network communication
+//! ### Threading:
+//!  - We make heavy use of multithreading/processing:
+//!     - [Tokio](https://docs.rs/tokio/latest/tokio/) (green) threads for all asynchronous workloads
+//!     - Every connecting API and P2P client gets its own thread
+//!     - Housekeeping is performed in a background thread without blocking table operations
+//! ### Peer-to-peer communication:
+//!  - We are using [channels](https://crates.io/crates/channels) for inter-node communication
+//!     - This allows us to serialize/deserialize entire structs
+//!    typesafe and integrity checked
+//!     - Protocol details are specified in the [`peer_messages`] module
+//!     - Inter-node messages are specified in [`PeerMessage`]
+//!  - Nodes exiting unexpectedly or sending invalid messages do not crash other nodes
+//!     - Errors are detected (and logged if desired) and the connection to the misbehaving node is closed
+//!     - Non-responding nodes are detected by the housekeeping thread and removed from the overlay
+//!  - This gives us robustness against non-byzantine faults
+//!  - Nodes that *appear* to perform correctly, yet send well-formed but disruptive messages can not be detected
+//!
+//! # Security features:
 //! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
 //!     - Does not prevent [byzantine](https://en.wikipedia.org/wiki/Byzantine_fault) nodes from splitting the network or eclipsing nodes,
 //!     but prevents greedy nodes from abusing the storage system
@@ -32,87 +52,91 @@
 //! - Limited defence against nodes refusing to store values or disconnecting
 //!     - Our housekeeping thread continuously refreshes values that have been stored in the DHT upon our own request
 //!
-//! # Security evaluation: // todo
-//! - The inherent structure of the overlay offers some limited defense against id mapping attacks
-//!     - It is not easily possible to fool the peers around the intimidated identity, as they are already in direct contact
-//!     - Other nodes usually try to route requests as fast as possible into proximity of the intimidated identity
-//! - Likewise the finger table offers resistance against eclipse attacks
-//!     - Nodes regularly check in with all their fingers, which makes it hard to eclipse them fully with ongoing churn
-//!  - Stabilization method, which regularly checks the health of peers in neighborhood and fixes the overlay if necessary
-//!  - Storage and Retrieval attacks are partially mitigated by built in replication
-//!  - Inconsistent behaviour also partially mitigated by built in replication
-//!  - DoS Attacks such as content pollution and index poisoning are hardened against by PoW for insertion of values
+//! # Security discussion:
+//! - Byzantine fault tolerance is extremely difficult to achieve in a distributed system
+//! - We initially tried to implement a byzantine fault tolerance according to [this paper](https://www.cs.unm.edu/~treport/tr/05-04/chord.pdf),
+//! but came to the conclusion that it was not feasible to implement in the given time frame
+//! - Byzantine fault tolerance would require multiple complex submodules to be implemented, such as
+//!     - Secure multiparty computation
+//!     - Secure network size estimation
+//!     - A split of the overlay network into multiple swarms
+//! - We were not able to find a sufficiently advanced crate for secure multiparty computation
+//! and a (byzantine fault tolerant) network size estimation would carry the workload of an entire additional module
+//! - This is why we ultimately decided to only implement proof-of-work as a defence against greedy nodes
+//! - We understand that our system **can not defend** against a malicious attacker deliberately providing nodes with false information
+//! - We also understand that implementing such a system would not only be extremely difficult,
+//! but also extremely resource intensive and inefficient,
+//! as a significant amount of nodes would need to reach consensus on every single request
+//! - We do however note, that a few of our design choices should make attacks more difficult:
+//!     - Choosing IDs based on their IP address makes it harder for nodes to choose their position in the network
+//!     - This makes it more difficult to eclipse nodes
+//!     - The finger table also offers some resistance against eclipse attacks:
+//!         - Nodes regularly check in with all their fingers, which makes it difficult to eclipse them fully
+//!      - Our stabilization method regularly checks the health of peers in the neighborhood and fixes the overlay if necessary
+//!         - An attacker needs to operate their peers continuously, as they would otherwise be removed
+//!      - Overwriting values is possible, but expensive due to proof-of-work
+//!      - DoS Attacks, such as content pollution and index poisoning,
+//!      are hardened against by increased proof-of-work difficulty for write requests
 //!
-//! # Architecture
-//!  - Our architecture separates the Chord module from the API communication.
-//!  - The API simply makes the features of the Chord module accessible via network communication
-//!  - We make heavy use of multithreading/processing, using tokio's (green) threads for all asynchronous workloads, like
-//!       I/O.
-//!     
-//! ## Peer-to-peer communication
-//!  - We are using Rust channels for inter-node communication (this allows us to serialize/deserialize entire structs
-//!    typesafe and integrity checked)
-//!  - All inter-node messages are specified in [`PeerMessage`]
-//!  - Errors are passed up the stack and are processed accordingly. This means that for example an
-//!  unexpected error while communicating with a node only leads to the unexpected end of this connection
+//! # Future Work:
+//! We have some ideas/suggestions on how to further improve our implementation:
 //!
-//! ## Peer-to-peer protocol
-//! Short sketch of the messages exchanged to give a basic understanding how the protocol works.
-//!
-//! For understandability the processes are reduced and do not server as complete description.
-//!
-//! All processes are terminated by a [PeerMessage::CloseConnection]. This allows to send other requests
-//! after completing a process without needing to create a new connection.
-//!       
-//! ### Joining the Network
-//!
-//! - send [PeerMessage::GetNode] to obtain node responsible for own identifier
-//! - send [PeerMessage::SplitRequest] to obtain either the keys the new node is responsible or the
-//! actual responsible node if the overlay changed since the first request
-//! - send [PeerMessage::SetSuccessor] to the predecessor of the responsible node
-//!
-//! ### Retrieving or String a Value
-//! - send [PeerMessage::GetNode] to obtain the node responsible for the key
-//! - send [PeerMessage::GetValue] or [PeerMessage::InsertValue] to retrieve or set the value
-//!
-//! # Future Work
-//!
-//! ## Improved Sybil defence
-//! - It would likely be sensible to introduce further hardware such as bandwidth(with respective scanners)
+//! ## Improved sybil defence:
+//! - Currently we hash the IP and port of a node to determine its ID
+//!     - This could be easily adjusted to only hash IPs, making it harder to choose node position
 //! - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
-//! - This would also help with other attacks
+//! - We could introduce active scanning measures to track whether nodes are truly active and responsive
 //!
-//! ## Misbehaviour defence
-//! Currently only crash faults are dealt with. Malicious faults will go undetected.
-//! Local nodes could determine if a peer is misbehaving and exclude it from the overlay.
-//! However peers know their neighbors and could therefore act differently to different peers.
-//! Defending against such behaviour is hard, as for example a reporting system or similarly can
-//! be abused by malicious peers to get "good" nodes excluded from the network.
+//! ## Misbehaviour defence:
+//! - The most efficient way to "cheaply" detect misbehaving nodes would probably be an out-of-band
+//! reporting system and/or a scanning authority that secretly scans for misbehaving nodes and blacklists them,
+//! similarly to how [The Tor Project](https://www.torproject.org/) detects and blacklists misbehaving relays
+//! - This would however, go *against* the decentralization aspect of our system
 //!
-//! ## Better Stabilize
-//! Stabilize in its current form relies on each node to realize that a peer disconnected from the network
-//! This sometimes incorrectly invalidates `SetPredecessor` and `SetSuccessor` Requests, as they are
-//! denied on the grounds that the receiving node does not know yet that its current successor/predecessor
-//! no longer exists.
+//! ## Better Stabilize:
+//! - Stabilize in its current form relies on each node to individually realize that a peer has disconnected from the network
+//! - This sometimes incorrectly invalidates `SetPredecessor` and `SetSuccessor` requests,
+//! as they are denied on the grounds that the receiving node does not yet know,
+//! that its current successor/predecessor no longer exists
 //!
-//! # Work Distribution
-//!  - We usually worked closely together on the project, even including pair-programming
-//!  - Frequent communication and git allowed us to agilely distribute open tasks, further supported by automatic tests
-//!  - We helped each other out in solving open problems, bugs and making design decision
-//!  - In since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
-//!  - Valentin on the other hand mostly focused on security features, housekeeping, and CI/CD Pipline for automatic testing and documentation deployment
+//! # Work Distribution:
+//! - We usually worked closely together on the project, including pair-programming
+//! - Frequent communication and git allowed us to agilely distribute open tasks
+//! - A CI/CD pipeline was used to continuously test our commits
+//! - We assisted each other in solving open problems, bugs and making design decision
+//! - Since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
+//! - Valentin focused on security features, housekeeping, the CI/CD Pipline and documentation deployment
+//! - Together, we committed over 10.000 lines of code in more than 170 commits
+//! - The resulting codebase has ~2700 lines of code
+//! - Here are some git statistics to backup our claims of equal work distribution:
+//! ```bash
+//! git log --author="Valentin" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
+//! Added lines: 3313; Removed lines: 2223; Total lines: 1090
+//! ---
+//! git log --author="Eddie" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
+//! Added lines: 3634; Removed lines: 1773; Total lines: 1861
+//! ---
+//! git fame
+//! Total commits: 169
+//! Total ctimes: 1096
+//! Total files: 30
+//! Total loc: 10163
+//! | Author        |   loc |   coms |   fils |  distribution   |
+//! |:--------------|------:|-------:|-------:|:----------------|
+//! | Valentin Metz |  8730 |    120 |     21 | 85.9/71.0/70.0  |
+//! | Eddie Groh    |  1433 |     49 |      9 | 14.1/29.0/30.0  |
+//! ```
 //!
-//! # Effort Spend
-//!  - Since the midterm report, we were able to extend our framework without any major changes
-//!  - Therefore we were able to spend all effort on implementing new features
-//!  - Our effort therefore was spend on implementing everything named in the work distribution
-//!  - Additionally significant effort was spend on debugging multithreaded asynchronous code over multiple nodes
-//!  to realize the expected functionality of routing and stabilization
-//!  - Specifically for stabilize an own approach was developed to ensure proper functionality
-//!  with our implementation, augmented by the fact that there are few resources on how to handle
-//!  churn in chord
-//!  - Otherwise there has also been design effort to design and evaluate different approaches
-//!  for security to arrive at the system we implemented
+//!
+//! # Effort Spent:
+//! - Since the midterm report, we were able to extend our framework without any major structural changes
+//! - Therefore we were able to spend most of our effort on implementing new features
+//! - We implemented everything listed in the work distribution
+//! - Significant effort was spend debugging and testing our multithreaded code across multiple nodes,
+//! ensuring the correct functionality of routing and stabilization
+//! - We developed our own stabilization approach that is able to efficiently handle churn
+//! - We implemented a proof-of-work system and the ability to handle crashing / non-maliciously misbehaving nodes
+//! - We have also put significant effort into the correct and full documentation and of our codebase
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
@@ -1311,6 +1335,7 @@ async fn solve_proof_of_work(
     Ok(())
 }
 
+/// Calculate hash for ID-mapping
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
