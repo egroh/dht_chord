@@ -345,7 +345,7 @@ mod tests {
     async fn test_hammer_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
         let amount_peers: usize = 10;
-        let dhts = start_peers(amount_peers, false, 30).await;
+        let dhts = start_peers(amount_peers, false, 40).await;
 
         // tokio::time::sleep(Duration::from_millis(50)).await;
 
