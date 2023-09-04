@@ -90,10 +90,6 @@ use crate::chord::peer_messages::{ChordPeer, PeerMessage, ProofOfWorkChallenge, 
 
 pub mod peer_messages;
 
-/// Simple macro for opening a connection to another peer with the provided address
-/// # Arguments
-///
-/// * `address` - the node to which an connection should be established
 macro_rules! connect_to_peer {
     ($address:expr) => {{
         let stream = TcpStream::connect($address).await?;
@@ -102,35 +98,50 @@ macro_rules! connect_to_peer {
     }};
 }
 
-/// Structure containing the state of the local node and all methods interacting with it
+/// Distributed Hash Table
+///
+/// This struct provides methods necessary to interact with the DHT.
+///
+/// As the DHT is heavily multithreaded,
+/// its internal state is held in an atomic reference counter (Arc).
 #[derive(Clone)]
 pub struct Chord {
     state: Arc<ChordState>,
 }
 
-/// Structure containing all the state of chord
+/// All data necessary for DHT operation
 struct ChordState {
-    /// the identifier of this node on the key ring
+    /// Our own Node-ID.
     node_id: u64,
-    /// the address where this node is reachable
+
+    /// Our outward facing address.
+    ///
+    /// Note that as it is used to calculate the node id,
+    /// it must be the address we are reachable under to other nodes.
     address: SocketAddr,
 
-    /// The finger table is represented by a vector with 64 entries, which are individually read write locked.
-    ///  Since the finger table never changes in size, and per invariant individual entries are always correct
-    /// (but possibly non-optimal) we can only always lock one entry
+    /// The characteristic [Chord](https://en.wikipedia.org/wiki/Chord_(peer-to-peer)) jump table.
+    /// We maintain 64 entries with exponentially growing distance between them.
+    /// As we are expected to do maintenance and handle churn - even under heavy load,
+    /// entries are lockable individually.
+    /// Small inconsistencies are tolerable, as they only affect routing efficiency.
     finger_table: Vec<RwLock<ChordPeer>>,
-    /// The predecessors vector is protected by a single lock since they change in since and have direct
-    /// effects like the responsibility for keys
+
+    /// List of predecessors do determine key responsibility
+    /// and provide limited fault tolerance in case of churn.
     predecessors: RwLock<Vec<ChordPeer>>,
 
-    /// The duration entries are stored in the dht
+    /// Default storage duration of entries, if not specified otherwise.
     default_storage_duration: Duration,
+
     /// The maximum duration for which we keep an item
     /// we have been tasked to store by the network in our [`node_storage`](ChordState::node_storage).
     /// Does not apply to [`personal_storage`](ChordState::personal_storage).
     max_storage_duration: Duration,
 
-    /// The default amount of replications which are done for each entry
+    /// The default amount of replications which are done for each entry.
+    /// Replications are performed
+    /// by increasing the key the entry is stored under by 1 and re-hashing the result.
     default_replication_amount: u8,
 
     /// The personal storage keeps track of entries we have been asked to store by the local user.
@@ -139,6 +150,7 @@ struct ChordState {
     /// It maps a key to a tuple of the value, the expiration time and the replication amount.
     /// It is also used as cache for fast local lookups.
     personal_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>, u8)>, // Key, (Value, Expiration time, Replication Amount)
+
     /// The node storage keeps track of entries that have been assigned to the local DHT node by the network.
     /// Once the stored DateTime is hit, the entry expires and is removed by the housekeeping thread.
     node_storage: DashMap<u64, (Vec<u8>, DateTime<Utc>)>,
@@ -421,7 +433,7 @@ impl Chord {
                         let ttl = (entry.value().1 - Utc::now())
                             .to_std()
                             .unwrap_or(self.state.default_storage_duration);
-                        if self.is_responsible_for_key(key) {
+                        if self.am_responsible_for_key(key) {
                             debug!("Storing key {} locally!", key);
                             self.internal_insert(key, entry.value().0.clone(), ttl)
                                 .await?;
@@ -482,7 +494,7 @@ impl Chord {
             .insert(key, (value.clone(), Utc::now() + ttl, replication_amount));
         for i in 0..=replication_amount {
             let key = calculate_hash(&(key + i as u64));
-            if self.is_responsible_for_key(key) {
+            if self.am_responsible_for_key(key) {
                 debug!("Storing key {} locally!", key);
                 self.internal_insert(key, value.clone(), ttl).await?;
             } else {
@@ -501,7 +513,7 @@ impl Chord {
     /// Inserts the entry into the [`node_storage`](ChordState::node_storage) with the correct time
     /// when the entry will be expired
     async fn internal_insert(&self, key: u64, value: Vec<u8>, ttl: Duration) -> Result<()> {
-        debug_assert!(self.is_responsible_for_key(key));
+        debug_assert!(self.am_responsible_for_key(key));
         if self.state.max_storage_duration > ttl {
             self.state
                 .node_storage
@@ -539,7 +551,7 @@ impl Chord {
             {
                 debug!("Key {} found in node storage", key);
                 return Ok(value);
-            } else if !self.is_responsible_for_key(key) {
+            } else if !self.am_responsible_for_key(key) {
                 let peer = self.get_responsible_node(key).await?;
                 let (mut tx, mut rx) = connect_to_peer!(peer.address);
                 tx.send(PeerMessage::GetValue(key)).await?;
@@ -559,7 +571,7 @@ impl Chord {
     ///
     /// This is the case if the key lies between us (inclusive) and our predecessor (exclusive)
     /// or no predecessor is currently known in which case this method always returns true
-    fn is_responsible_for_key(&self, key: u64) -> bool {
+    fn am_responsible_for_key(&self, key: u64) -> bool {
         if let Some(predecessor) = self.state.predecessors.read().first() {
             is_between_on_ring(key, predecessor.id, self.state.node_id)
         } else {
@@ -573,7 +585,7 @@ impl Chord {
     /// in the finger table and contact it
     async fn get_responsible_node(&self, key: u64) -> Result<ChordPeer> {
         // This method should never be called when we are responsible for this key
-        debug_assert!(!self.is_responsible_for_key(key));
+        debug_assert!(!self.am_responsible_for_key(key));
 
         // Check if successor is responsible
         let successor = *self
@@ -1023,12 +1035,11 @@ impl Chord {
                     require_proof_of_work(&mut tx, &mut rx, 1).await?;
                     // if we do not have a predecessor we are responsible for all keys
                     // otherwise check if the key is between us and our predecessor in which case we are also responsible
-                    if self.is_responsible_for_key(id) {
+                    if self.am_responsible_for_key(id) {
                         debug!(
                             "{} - {:x} was asked for node responsible  {:x}, which is us",
                             self.state.address, self.state.node_id, id
                         );
-
                         tx.send(PeerMessage::GetNodeResponse(ChordPeer {
                             id: self.state.node_id,
                             address: self.state.address,
