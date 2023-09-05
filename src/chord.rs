@@ -4,26 +4,26 @@
 //!
 //! # Features:
 //! - Key-Value storage
-//! - Distributed, if more than one node available (but fully functional with one node only)
+//! - Distributed, if more than one node is available (but fully functional with one node only)
 //! - Built-in replication
 //! - IPv4 and IPv6 support
 //! - Automatic node discovery
 //! - Stabilization if nodes leave or join
-//! - Housekeeping thread to remove expired entries and refresh
+//! - Housekeeping thread to remove expired entries and refresh desired keys
 //! - Completely asynchronous and multi-threaded
 //! - Requests from the API and from other nodes are processed and answered concurrently
 //! - Free of race conditions due to Rusts ownership model
 //! - Performance optimized implementation, capable of establishing a fully connected network with 2000
-//! nodes running on a single machine in under 10 seconds (without PoW)
+//! nodes running on a single machine in under 10 seconds (with PoW defence deactivated)
 //!
 //! # Architecture:
 //!  - Our architecture separates the Chord module from the API communication
-//!  - The API only makes the features of the Chord module accessible via network communication
+//!  - The API just makes features of the Chord module accessible via network communication
 //! ### Threading:
 //!  - We make heavy use of multithreading/processing:
 //!     - [Tokio](https://docs.rs/tokio/latest/tokio/) (green) threads for all asynchronous workloads
 //!     - Every connecting API and P2P client gets its own thread
-//!     - Housekeeping is performed in a background thread without blocking table operations
+//!     - Housekeeping is performed in a background thread without blocking other operations
 //! ### Peer-to-peer communication:
 //!  - We are using [channels](https://crates.io/crates/channels) for inter-node communication
 //!     - This allows us to serialize/deserialize entire structs
@@ -34,7 +34,7 @@
 //!     - Errors are detected (and logged if desired) and the connection to the misbehaving node is closed
 //!     - Non-responding nodes are detected by the housekeeping thread and removed from the overlay
 //!  - This gives us robustness against non-byzantine faults
-//!  - Nodes that *appear* to perform correctly, yet send well-formed but disruptive messages can not be detected
+//!  - Nodes that appear to perform correctly, yet send well-formed but disruptive messages can not be detected
 //!
 //! # Security features:
 //! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
@@ -63,8 +63,8 @@
 //! - We were not able to find a sufficiently advanced crate for secure multiparty computation
 //! and a (byzantine fault tolerant) network size estimation would carry the workload of an entire additional module
 //! - This is why we ultimately decided to only implement proof-of-work as a defence against greedy nodes
-//! - We understand that our system **can not defend** against a malicious attacker deliberately providing nodes with false information
-//! - We also understand that implementing such a system would not only be extremely difficult,
+//! - Therefore our system can not defend against a malicious attacker deliberately providing nodes with false information
+//! - Implementing a system which can defend against such attacks would not only be extremely difficult,
 //! but also extremely resource intensive and inefficient,
 //! as a significant amount of nodes would need to reach consensus on every single request
 //! - We do however note, that a few of our design choices should make attacks more difficult:
@@ -72,6 +72,8 @@
 //!     - This makes it more difficult to eclipse nodes
 //!     - The finger table also offers some resistance against eclipse attacks:
 //!         - Nodes regularly check in with all their fingers, which makes it difficult to eclipse them fully
+//!      - To prevent race conditions, there are checks if overlay changes like `SetPredecessor` are valid,
+//!        which also hardens against attacker trying to modify it to their will
 //!      - Our stabilization method regularly checks the health of peers in the neighborhood and fixes the overlay if necessary
 //!         - An attacker needs to operate their peers continuously, as they would otherwise be removed
 //!      - Overwriting values is possible, but expensive due to proof-of-work
@@ -83,7 +85,8 @@
 //!
 //! ## Improved sybil defence:
 //! - Currently we hash the IP and port of a node to determine its ID
-//!     - This could be easily adjusted to only hash IPs, making it harder to choose node position
+//!     - This could be easily adjusted to only hash IPs, making it even harder to choose node position,
+//!       which would require each node to have its own unique public IP Address
 //! - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
 //! - We could introduce active scanning measures to track whether nodes are truly active and responsive
 //!
@@ -91,7 +94,7 @@
 //! - The most efficient way to "cheaply" detect misbehaving nodes would probably be an out-of-band
 //! reporting system and/or a scanning authority that secretly scans for misbehaving nodes and blacklists them,
 //! similarly to how [The Tor Project](https://www.torproject.org/) detects and blacklists misbehaving relays
-//! - This would however, go *against* the decentralization aspect of our system
+//! - This would however, go against the decentralization aspect of our system
 //!
 //! ## Better Stabilize:
 //! - Stabilize in its current form relies on each node to individually realize that a peer has disconnected from the network
@@ -102,7 +105,7 @@
 //! # Work Distribution:
 //! - We usually worked closely together on the project, including pair-programming
 //! - Frequent communication and git allowed us to agilely distribute open tasks
-//! - A CI/CD pipeline was used to continuously test our commits
+//! - A CI/CD pipeline was used to continuously test our commits, preventing interference by broken code
 //! - We assisted each other in solving open problems, bugs and making design decision
 //! - Since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
 //! - Valentin focused on security features, housekeeping, the CI/CD Pipline and documentation deployment
@@ -136,7 +139,7 @@
 //! ensuring the correct functionality of routing and stabilization
 //! - We developed our own stabilization approach that is able to efficiently handle churn
 //! - We implemented a proof-of-work system and the ability to handle crashing / non-maliciously misbehaving nodes
-//! - We have also put significant effort into the correct and full documentation and of our codebase
+//! - We have also put significant effort into the correct and complete documentation and of our codebase
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;

@@ -236,7 +236,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_store_get() {
         let _ = env_logger::Builder::from_env(Env::default().default_filter_or("debug")).try_init();
-        let dhts = start_peers(1, false, 4).await;
+        let dhts = start_peers(1, false, 5).await;
 
         let key = [0x1; 32];
         let value = vec![0x1, 0x2, 0x3];

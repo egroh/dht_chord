@@ -29,7 +29,7 @@
 //! ```
 //! To run our program, you may use:
 //! ```bash
-//! cargo run --release -- p2p_dht -c example_config_node_0.ini
+//! cargo run --release -- -c example_config_node_0.ini
 //! ```
 //! We support different levels of logging, with the default being `info`.
 //! You can change the log level by setting the `RUST_LOG` environment variable to one of the following values:
@@ -69,7 +69,7 @@
 //! Whenever you see a module, struct or function or any other clickable link in this documentation,
 //! you can use it to directly jump to description and explanation of the corresponding code.
 //!
-//! Below, you will find links to modules of this crate:
+//! All other required parts of the final report are found in the chord module linked below:
 #![doc(html_favicon_url = "https://www.net.in.tum.de/favicon.ico")]
 #![doc(html_logo_url = "https://net.in.tum.de/Images/tum-logo-5d7bd62d.svg")]
 #![allow(dead_code)]
