@@ -69,7 +69,8 @@
 //! Whenever you see a module, struct or function or any other clickable link in this documentation,
 //! you can use it to directly jump to description and explanation of the corresponding code.
 //!
-//! All other required parts of the final report are found in the chord module linked below:
+//! Below, you will find links to the modules of this crate,
+//! which contain further details of our report:
 #![doc(html_favicon_url = "https://www.net.in.tum.de/favicon.ico")]
 #![doc(html_logo_url = "https://net.in.tum.de/Images/tum-logo-5d7bd62d.svg")]
 #![allow(dead_code)]

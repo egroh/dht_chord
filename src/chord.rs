@@ -4,21 +4,21 @@
 //!
 //! # Features:
 //! - Key-Value storage
-//! - Distributed, if more than one node is available (but fully functional with one node only)
+//! - Distributed, if more than one node available (but fully functional with one node only)
 //! - Built-in replication
 //! - IPv4 and IPv6 support
 //! - Automatic node discovery
 //! - Stabilization if nodes leave or join
-//! - Housekeeping thread to remove expired entries and refresh desired keys
+//! - Housekeeping thread, to remove expired entries and refresh keys we have been tasked to store
 //! - Completely asynchronous and multi-threaded
 //! - Requests from the API and from other nodes are processed and answered concurrently
 //! - Free of race conditions due to Rusts ownership model
 //! - Performance optimized implementation, capable of establishing a fully connected network with 2000
-//! nodes running on a single machine in under 10 seconds (with PoW defence deactivated)
+//! nodes running on a single machine in under 10 seconds (without proof-of-work enabled)
 //!
 //! # Architecture:
 //!  - Our architecture separates the Chord module from the API communication
-//!  - The API just makes features of the Chord module accessible via network communication
+//!  - The API only makes the features of the Chord module accessible via network communication
 //! ### Threading:
 //!  - We make heavy use of multithreading/processing:
 //!     - [Tokio](https://docs.rs/tokio/latest/tokio/) (green) threads for all asynchronous workloads
@@ -34,7 +34,7 @@
 //!     - Errors are detected (and logged if desired) and the connection to the misbehaving node is closed
 //!     - Non-responding nodes are detected by the housekeeping thread and removed from the overlay
 //!  - This gives us robustness against non-byzantine faults
-//!  - Nodes that appear to perform correctly, yet send well-formed but disruptive messages can not be detected
+//!  - Nodes that *appear* to perform correctly, yet send well-formed but disruptive messages can not be detected
 //!
 //! # Security features:
 //! - [SHA-3-512](https://docs.rs/sha3/0.10.8/sha3/) proof of work challenges with adjustable difficulty for requests
@@ -63,8 +63,8 @@
 //! - We were not able to find a sufficiently advanced crate for secure multiparty computation
 //! and a (byzantine fault tolerant) network size estimation would carry the workload of an entire additional module
 //! - This is why we ultimately decided to only implement proof-of-work as a defence against greedy nodes
-//! - Therefore our system can not defend against a malicious attacker deliberately providing nodes with false information
-//! - Implementing a system which can defend against such attacks would not only be extremely difficult,
+//! - We understand that our system **can not defend** against a malicious attacker deliberately providing nodes with false information
+//! - Implementing such a system would not only be extremely difficult,
 //! but also extremely resource intensive and inefficient,
 //! as a significant amount of nodes would need to reach consensus on every single request
 //! - We do however note, that a few of our design choices should make attacks more difficult:
@@ -73,7 +73,9 @@
 //!     - The finger table also offers some resistance against eclipse attacks:
 //!         - Nodes regularly check in with all their fingers, which makes it difficult to eclipse them fully
 //!      - To prevent race conditions, there are checks if overlay changes like `SetPredecessor` are valid,
-//!        which also hardens against attacker trying to modify it to their will
+//!      or if there are other nodes between the current node and the new predecessor
+//!         - This makes it more difficult for an attacker to split the network or eclipse nodes,
+//!         as nodes will not accept an incorrectly placed node any new node as their predecessor
 //!      - Our stabilization method regularly checks the health of peers in the neighborhood and fixes the overlay if necessary
 //!         - An attacker needs to operate their peers continuously, as they would otherwise be removed
 //!      - Overwriting values is possible, but expensive due to proof-of-work
@@ -85,8 +87,9 @@
 //!
 //! ## Improved sybil defence:
 //! - Currently we hash the IP and port of a node to determine its ID
-//!     - This could be easily adjusted to only hash IPs, making it even harder to choose node position,
-//!       which would require each node to have its own unique public IP Address
+//!     - This could be easily adjusted to only hash IPs,
+//!     making it harder to choose a specific node position for an attacker,
+//!     as this would require them to have control over a large number of IP addresses
 //! - New nodes should be treated differently, i.e. not as trustworthy until they stayed some time in the network
 //! - We could introduce active scanning measures to track whether nodes are truly active and responsive
 //!
@@ -94,7 +97,7 @@
 //! - The most efficient way to "cheaply" detect misbehaving nodes would probably be an out-of-band
 //! reporting system and/or a scanning authority that secretly scans for misbehaving nodes and blacklists them,
 //! similarly to how [The Tor Project](https://www.torproject.org/) detects and blacklists misbehaving relays
-//! - This would however, go against the decentralization aspect of our system
+//! - This would however, go *against* the decentralization aspect of our system
 //!
 //! ## Better Stabilize:
 //! - Stabilize in its current form relies on each node to individually realize that a peer has disconnected from the network
@@ -105,7 +108,7 @@
 //! # Work Distribution:
 //! - We usually worked closely together on the project, including pair-programming
 //! - Frequent communication and git allowed us to agilely distribute open tasks
-//! - A CI/CD pipeline was used to continuously test our commits, preventing interference by broken code
+//! - A CI/CD pipeline was used to continuously test our commits, allowing us to detect bugs consistently and early
 //! - We assisted each other in solving open problems, bugs and making design decision
 //! - Since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
 //! - Valentin focused on security features, housekeeping, the CI/CD Pipline and documentation deployment
@@ -113,21 +116,23 @@
 //! - The resulting codebase has ~2700 lines of code
 //! - Here are some git statistics to backup our claims of equal work distribution:
 //! ```bash
+//! commit 3c18e19055bac1da5c56bbfac85d0b9a0351bed6:
+//! ---
 //! git log --author="Valentin" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
-//! Added lines: 3313; Removed lines: 2223; Total lines: 1090
+//! Added lines: 3428; Removed lines: 2297; Total lines: 1131
 //! ---
 //! git log --author="Eddie" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
-//! Added lines: 3634; Removed lines: 1773; Total lines: 1861
+//! Added lines: 3653; Removed lines: 1789; Total lines: 1864
 //! ---
 //! git fame
-//! Total commits: 169
-//! Total ctimes: 1096
+//! Total commits: 177
+//! Total ctimes: 1129
 //! Total files: 30
-//! Total loc: 10163
+//! Total loc: 10207
 //! | Author        |   loc |   coms |   fils |  distribution   |
 //! |:--------------|------:|-------:|-------:|:----------------|
-//! | Valentin Metz |  8730 |    120 |     21 | 85.9/71.0/70.0  |
-//! | Eddie Groh    |  1433 |     49 |      9 | 14.1/29.0/30.0  |
+//! | Valentin Metz |  8810 |    126 |     21 | 86.3/71.2/70.0  |
+//! | Eddie Groh    |  1397 |     51 |      9 | 13.7/28.8/30.0  |
 //! ```
 //!
 //!

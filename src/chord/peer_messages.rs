@@ -10,7 +10,7 @@
 //!
 //! The exact protocol specification can be found [here](https://github.com/threadexio/channels-rs/blob/master/spec/PROTOCOL.md).
 //!
-//! More importantly, this means that we do not have to interact with a raw byte-level TCP socket.
+//! More importantly, this means that we do *not* have to interact with a raw byte-level TCP socket.
 //! Instead, we simply transmit and match a [`PeerMessage`].
 use std::net::SocketAddr;
 use std::time::Duration;
