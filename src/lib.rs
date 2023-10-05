@@ -1,6 +1,9 @@
 #![feature(async_closure)]
 
-//! Documentation and final report for the P2P DHT project.
+//! This repository showcases a Rust P2P-DHT-Chord.
+//!
+//! It was created as part of the [Peer-to-Peer Security](https://www.net.in.tum.de/teaching/ss23/p2p.html) lecture at TUM.
+//!
 //!
 //! # Architecture:
 //! All you need to build our package is the latest (nightly) version of the Rust compiler and Cargo.
@@ -11,7 +14,7 @@
 //! - `cargo 1.74.0-nightly (96fe1c9e1 2023-08-29)`
 //! - `rustc 1.74.0-nightly (35e416303 2023-09-01)`
 //!
-//! [This documentation](https://gitlab.lrz.de/netintum/teaching/p2psec_projects_2023/DHT-2/-/jobs/artifacts/master/file/target/doc/p2p_dht/index.html?job=documentation) was built with:
+//! [This documentation](https://valentin-metz.github.io/dht_chord/dht_chord/index.html) was built with:
 //! - `rustdoc 1.74.0-nightly (35e416303 2023-09-01)`
 //!
 //! # Main executable:
@@ -39,7 +42,7 @@
 //! - `debug`
 //! - `trace`
 //!
-//! The latest `x86_64-unknown-linux-gnu` binary of our program is provided as an artifact on our [GitLab repository](https://gitlab.lrz.de/netintum/teaching/p2psec_projects_2023/DHT-2/-/jobs/artifacts/master/file/target/release/p2p_dht?job=build).
+//! The latest `x86_64-unknown-linux-gnu` binary of our program is provided as an artifact on our [GitHub repository](https://github.com/Valentin-Metz/dht_chord/actions/workflows/rust.yml).
 //!
 //! Alternatively, you may choose to build our program yourself:
 //! ## Compilation:
@@ -47,16 +50,16 @@
 //! ```bash
 //! cargo build --release
 //! ```
-//! This will create a binary in `target/release/p2p_dht`.
+//! This will create a binary in `target/release/dht_chord`.
 //!
 //! You can also build this documentation locally:
 //! ```bash
 //! cargo doc --no-deps --document-private-items
 //! ```
-//! The documentation will be created in `target/doc/p2p_dht/index.html`.
+//! The documentation will be created in `target/doc/dht_chord/index.html`.
 //! ## Testing:
 //! We provide a CI/CD pipeline that runs our tests on every commit.
-//! You may find the latest results [here](https://gitlab.lrz.de/netintum/teaching/p2psec_projects_2023/DHT-2/-/pipelines/latest).
+//! You may find the latest results [here](https://github.com/Valentin-Metz/dht_chord/actions).
 //!
 //! Alternatively, you can run our test suit yourself:
 //! ```bash
@@ -69,10 +72,9 @@
 //! Whenever you see a module, struct or function or any other clickable link in this documentation,
 //! you can use it to directly jump to description and explanation of the corresponding code.
 //!
-//! Below, you will find links to the modules of this crate,
-//! which contain further details of our report:
+//! Below, you will find links to the modules of this crate:
 #![doc(html_favicon_url = "https://www.net.in.tum.de/favicon.ico")]
-#![doc(html_logo_url = "https://net.in.tum.de/Images/tum-logo-5d7bd62d.svg")]
+#![doc(html_logo_url = "https://feuermagier.com/assets/fire_bird.png")]
 #![allow(dead_code)]
 pub mod api_communication;
 pub mod chord;

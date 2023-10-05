@@ -6,7 +6,7 @@
 //!
 //! Answer to messages received are not guaranteed to be sent in the same order as the requests were received.
 //!
-//! As specified in the assignment for DHT, the following requests are accepted and processed:
+//! As per specification, the following requests are accepted and processed:
 //!
 //! - DHT PUT
 //! - DHT GET

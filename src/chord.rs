@@ -55,7 +55,7 @@
 //! # Security discussion:
 //! - Byzantine fault tolerance is extremely difficult to achieve in a distributed system
 //! - We initially tried to implement a byzantine fault tolerance according to [this paper](https://www.cs.unm.edu/~treport/tr/05-04/chord.pdf),
-//! but came to the conclusion that it was not feasible to implement in the given time frame
+//! but came to the conclusion that it was not feasible to implement in a reasonable time frame
 //! - Byzantine fault tolerance would require multiple complex submodules to be implemented, such as
 //!     - Secure multiparty computation
 //!     - Secure network size estimation
@@ -105,46 +105,6 @@
 //! as they are denied on the grounds that the receiving node does not yet know,
 //! that its current successor/predecessor no longer exists
 //!
-//! # Work Distribution:
-//! - We usually worked closely together on the project, including pair-programming
-//! - Frequent communication and git allowed us to agilely distribute open tasks
-//! - A CI/CD pipeline was used to continuously test our commits, allowing us to detect bugs consistently and early
-//! - We assisted each other in solving open problems, bugs and making design decision
-//! - Since the last report Eddie generally focused on core functionality like node joining, routing and stabilization
-//! - Valentin focused on security features, housekeeping, the CI/CD Pipline and documentation deployment
-//! - Together, we committed over 10.000 lines of code in more than 170 commits
-//! - The resulting codebase has ~2700 lines of code
-//! - Here are some git statistics to backup our claims of equal work distribution:
-//! ```bash
-//! commit 3c18e19055bac1da5c56bbfac85d0b9a0351bed6:
-//! ---
-//! git log --author="Valentin" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
-//! Added lines: 3428; Removed lines: 2297; Total lines: 1131
-//! ---
-//! git log --author="Eddie" --pretty=tformat: --numstat | gawk '{ add += $1; subs += $2; loc += $1 - $2 } END { printf "Added lines: %s; Removed lines: %s; Total lines: %s\n", add, subs, loc }' -
-//! Added lines: 3653; Removed lines: 1789; Total lines: 1864
-//! ---
-//! git fame
-//! Total commits: 177
-//! Total ctimes: 1129
-//! Total files: 30
-//! Total loc: 10207
-//! | Author        |   loc |   coms |   fils |  distribution   |
-//! |:--------------|------:|-------:|-------:|:----------------|
-//! | Valentin Metz |  8810 |    126 |     21 | 86.3/71.2/70.0  |
-//! | Eddie Groh    |  1397 |     51 |      9 | 13.7/28.8/30.0  |
-//! ```
-//!
-//!
-//! # Effort Spent:
-//! - Since the midterm report, we were able to extend our framework without any major structural changes
-//! - Therefore we were able to spend most of our effort on implementing new features
-//! - We implemented everything listed in the work distribution
-//! - Significant effort was spend debugging and testing our multithreaded code across multiple nodes,
-//! ensuring the correct functionality of routing and stabilization
-//! - We developed our own stabilization approach that is able to efficiently handle churn
-//! - We implemented a proof-of-work system and the ability to handle crashing / non-maliciously misbehaving nodes
-//! - We have also put significant effort into the correct and complete documentation and of our codebase
 
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
