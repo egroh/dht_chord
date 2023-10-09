@@ -1,8 +1,14 @@
 #![feature(async_closure)]
 
-//! This repository showcases a Rust P2P-DHT-Chord.
+//! This repository showcases a Rust P2P-DHT-Chord implementation.
+//! It was designed with a focus on performance, security and reliability.
+//! The entire project is heavily multithreaded and asynchronous.
+//! It features built-in replication of content,
+//! as well as a proof-of-work challenge to prevent Sybil attacks.
+//! Node discovery and network stabilization are performed automatically
+//! whenever new nodes join or leave the network.
 //!
-//! It was created as part of the [Peer-to-Peer Security](https://www.net.in.tum.de/teaching/ss23/p2p.html) lecture at TUM.
+//! It was created as part of the [Peer-to-Peer Systems and Security](https://www.net.in.tum.de/teaching/ss23/p2p.html) lecture at TUM.
 //!
 //!
 //! # Architecture:
