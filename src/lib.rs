@@ -1,6 +1,7 @@
 #![feature(async_closure)]
 
 //! This repository showcases a Rust P2P-DHT-Chord implementation.
+//!
 //! It was designed with a focus on performance, security and reliability.
 //! The entire project is heavily multithreaded and asynchronous.
 //! It features built-in replication of content,
