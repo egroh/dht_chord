@@ -1,0 +1,61 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="This repository showcases a Rust P2P-DHT-Chord implementation."><title>dht_chord - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-20739d33.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="dht_chord" data-themes="" data-resource-suffix="" data-rustdoc-version="1.88.0-nightly (b4c8b0c3f 2025-04-25)" data-channel="nightly" data-search-js="search-f7877310.js" data-settings-js="settings-5514c975.js" ><script src="../static.files/storage-4e99c027.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-7ef8a74a.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="icon" href="https://www.net.in.tum.de/favicon.ico"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button><a class="logo-container" href="../dht_chord/index.html"><img src="https://feuermagier.com/assets/fire_bird.png" alt=""></a></nav><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../dht_chord/index.html"><img src="https://feuermagier.com/assets/fire_bird.png" alt="logo"></a><h2><a href="../dht_chord/index.html">dht_<wbr>chord</a><span class="version">1.0.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#architecture" title="Architecture:">Architecture:</a></li><li><a href="#main-executable" title="Main executable:">Main executable:</a><ul><li><a href="#compilation" title="Compilation:">Compilation:</a></li><li><a href="#testing" title="Testing:">Testing:</a></li></ul></li><li><a href="#how-to-read-this-documentation" title="How to read this documentation:">How to read this documentation:</a></li></ul><h3><a href="#modules">Crate Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>dht_chord</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/dht_chord/lib.rs.html#1-87">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>This repository showcases a Rust P2P-DHT-Chord implementation.</p>
+<p>It was designed with a focus on performance, security and reliability.
+The entire project is heavily multithreaded and asynchronous.
+It features built-in replication of content,
+as well as a proof-of-work challenge to prevent Sybil attacks.
+Node discovery and network stabilization are performed automatically
+whenever new nodes join or leave the network.</p>
+<p>It was created as part of the <a href="https://www.net.in.tum.de/teaching/ss23/p2p.html">Peer-to-Peer Systems and Security</a> lecture at TUM.</p>
+<h2 id="architecture"><a class="doc-anchor" href="#architecture">§</a>Architecture:</h2>
+<p>All you need to build our package is the latest (nightly) version of the Rust compiler and Cargo.</p>
+<p>Installation instructions for Rust are provided <a href="https://www.rust-lang.org/tools/install">here</a>.</p>
+<p>For reference, we are currently working with the following versions:</p>
+<ul>
+<li><code>cargo 1.74.0-nightly (96fe1c9e1 2023-08-29)</code></li>
+<li><code>rustc 1.74.0-nightly (35e416303 2023-09-01)</code></li>
+</ul>
+<p><a href="https://valentin-metz.github.io/dht_chord/dht_chord/index.html">This documentation</a> was built with:</p>
+<ul>
+<li><code>rustdoc 1.74.0-nightly (35e416303 2023-09-01)</code></li>
+</ul>
+<h2 id="main-executable"><a class="doc-anchor" href="#main-executable">§</a>Main executable:</h2>
+<p>The main executable of this program <code>p2p_dht</code> takes one command line argument, <code>-c &lt;config&gt;</code>,
+where <code>&lt;config&gt;</code> is the path to a configuration file.</p>
+<p>The configuration file is expected to be in the INI format. The following configuration options are available:</p>
+<div class="example-wrap"><pre class="language-ini"><code>[dht]
+default_store_duration = 60     ; Default storage duration in seconds
+max_store_duration = 600        ; Maximum storage duration in seconds
+p2p_address = 127.0.0.1:8001    ; Address to listen on for P2P connections
+api_address = 127.0.0.1:7401    ; Address to listen on for API connections
+bootstrap_node = 127.0.0.1:8000 ; (Optional) Address of a bootstrap node</code></pre></div>
+<p>To run our program, you may use:</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo run --release -- -c example_config_node_0.ini</code></pre></div>
+<p>We support different levels of logging, with the default being <code>info</code>.
+You can change the log level by setting the <code>RUST_LOG</code> environment variable to one of the following values:</p>
+<ul>
+<li><code>error</code></li>
+<li><code>warn</code></li>
+<li><code>info</code></li>
+<li><code>debug</code></li>
+<li><code>trace</code></li>
+</ul>
+<p>The latest <code>x86_64-unknown-linux-gnu</code> binary of our program is provided as an artifact on our <a href="https://github.com/Valentin-Metz/dht_chord/actions/workflows/rust.yml">GitHub repository</a>.</p>
+<p>Alternatively, you may choose to build our program yourself:</p>
+<h3 id="compilation"><a class="doc-anchor" href="#compilation">§</a>Compilation:</h3>
+<p>After cloning this repository, you may run the following command to build our program:</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo build --release</code></pre></div>
+<p>This will create a binary in <code>target/release/dht_chord</code>.</p>
+<p>You can also build this documentation locally:</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo doc --no-deps --document-private-items</code></pre></div>
+<p>The documentation will be created in <code>target/doc/dht_chord/index.html</code>.</p>
+<h3 id="testing"><a class="doc-anchor" href="#testing">§</a>Testing:</h3>
+<p>We provide a CI/CD pipeline that runs our tests on every commit.
+You may find the latest results <a href="https://github.com/Valentin-Metz/dht_chord/actions">here</a>.</p>
+<p>Alternatively, you can run our test suit yourself:</p>
+<div class="example-wrap"><pre class="language-bash"><code>cargo test --release</code></pre></div><h2 id="how-to-read-this-documentation"><a class="doc-anchor" href="#how-to-read-this-documentation">§</a>How to read this documentation:</h2>
+<p>Our documentation follows a “docs as code” approach,
+and is generated directly out of our source code.
+Whenever you see a module, struct or function or any other clickable link in this documentation,
+you can use it to directly jump to description and explanation of the corresponding code.</p>
+<p>Below, you will find links to the modules of this crate:</p>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="api_communication/index.html" title="mod dht_chord::api_communication">api_<wbr>communication</a></dt><dd>Provides a server socket for API communication</dd><dt><a class="mod" href="chord/index.html" title="mod dht_chord::chord">chord</a></dt><dd>Implementation of a distributed hash table based on <a href="https://en.wikipedia.org/wiki/Chord_(peer-to-peer)">Chord</a></dd></dl></section></div></main></body></html>
