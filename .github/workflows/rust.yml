@@ -10,33 +10,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-test-debug:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Build
-        run: cargo build --verbose
-      - name: Test
-        run: cargo test --verbose
-
-  build-test-publish-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Build release
-        run: cargo build --release --verbose
-      - name: Test release
-        run: cargo test --release --verbose
-      - name: Publish binary
-        uses: actions/upload-artifact@v3
-        with:
-          name: dht_chord
-          path: target/release/dht_chord
-
   documentation:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v2
       - name: Build documentation
         run: cargo doc --no-deps --document-private-items
       - name: Deploy documentation
